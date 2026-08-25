@@ -1,0 +1,1464 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monitor de campo — ESP32</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root {
+    --graphite: #14181C;
+    --panel: #1B2127;
+    --panel-2: #20272E;
+    --border: #2A323A;
+    --paper: #ECEAE2;
+    --muted: #9CA3AA;
+    --faint: #6B7280;
+    --amber: #FFB020;
+    --teal: #3FB8AF;
+    --red: #E5484D;
+    --mono: 'JetBrains Mono', 'SF Mono', 'Roboto Mono', ui-monospace, 'Cascadia Code', monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background-color: var(--graphite);
+    background-image:
+      linear-gradient(rgba(236,234,226,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(236,234,226,0.025) 1px, transparent 1px);
+    background-size: 28px 28px;
+    color: var(--paper);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .signal-bar {
+    height: 3px;
+    background: linear-gradient(90deg, var(--amber), var(--teal));
+  }
+
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 24px 20px 64px;
+  }
+
+  header.top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 20px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .brand .eyebrow {
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .brand h1 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: 0.01em;
+  }
+
+  .top-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .clock {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 11px 5px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--amber);
+    flex-shrink: 0;
+  }
+
+  .status-badge.live .dot { background: var(--teal); }
+  .status-badge.offline .dot { background: var(--red); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .dot.pulsing { animation: pulse 1.8s ease-in-out infinite; }
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(255,176,32,0.35); }
+    50% { opacity: 0.55; box-shadow: 0 0 0 5px rgba(255,176,32,0); }
+  }
+
+  /* Seletor de pivô — só aparece quando o backend informa mais de um device. */
+  .pivo-select {
+    display: none;
+    background: var(--panel-2);
+    color: var(--paper);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 6px 10px;
+    cursor: pointer;
+  }
+
+  .pivo-select.show { display: inline-block; }
+  .pivo-select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 22px;
+    transition: border-color 150ms ease;
+  }
+
+  .card:hover { border-color: #384049; }
+  .card.accent-amber { border-left-color: var(--amber); }
+  .card.accent-teal { border-left-color: var(--teal); }
+
+  .card .eyebrow {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin-bottom: 12px;
+  }
+
+  .ch-num { color: var(--faint); margin-right: 6px; }
+  .card.accent-amber .ch-num { color: var(--amber); }
+  .card.accent-teal .ch-num { color: var(--teal); }
+
+  .readout {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-family: var(--mono);
+  }
+
+  .readout .value {
+    font-size: 56px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+    text-shadow: 0 0 28px rgba(255,176,32,0.28);
+  }
+
+  .readout .unit { font-size: 18px; color: var(--muted); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .flash { animation: flash 400ms ease-out; }
+  }
+  @keyframes flash { 0% { opacity: 0.35; } 100% { opacity: 1; } }
+
+  .trend { font-size: 13px; font-family: var(--mono); margin-left: auto; }
+  .trend.up { color: var(--amber); }
+  .trend.down { color: var(--teal); }
+
+  .meta-line { margin-top: 10px; font-size: 12px; color: var(--faint); }
+
+  /* ── Estado do pivô ── */
+
+  .stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px 18px;
+    margin-top: 20px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+  }
+
+  .stat .k {
+    display: block;
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin-bottom: 4px;
+  }
+
+  .stat .v {
+    font-family: var(--mono);
+    font-size: 15px;
+    color: var(--paper);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stat .v small { font-size: 11.5px; color: var(--muted); margin-left: 3px; }
+
+  .progress-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-top: 18px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .progress-row b {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--muted);
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  .progress {
+    height: 4px;
+    background: var(--panel-2);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 8px;
+  }
+
+  .progress i {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, var(--amber), var(--teal));
+    transition: width 500ms ease;
+  }
+
+  /* ── Vista de topo ── */
+
+  .seg {
+    display: flex;
+    gap: 4px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 3px;
+    margin-bottom: 10px;
+  }
+
+  .seg button {
+    flex: 1;
+    background: none;
+    border: none;
+    border-radius: 6px;
+    color: var(--faint);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 5px 8px;
+    cursor: pointer;
+    transition: background 150ms ease, color 150ms ease;
+  }
+
+  .seg button:hover { color: var(--muted); }
+  .seg button:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+  .seg button.on { background: var(--panel); color: var(--paper); }
+
+  .dial-wrap {
+    height: 236px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .dial-wrap svg { width: 100%; height: 100%; max-width: 280px; }
+
+  .dial-empty {
+    color: var(--faint);
+    font-family: var(--mono);
+    font-size: 12.5px;
+    text-align: center;
+    line-height: 1.7;
+    padding: 0 24px;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .arm { transition: transform 700ms cubic-bezier(0.4, 0, 0.2, 1); }
+  }
+
+  .panel-title { font-size: 13px; font-weight: 600; letter-spacing: 0.02em; margin: 0 0 14px; }
+
+  .panel-title .aside {
+    float: right;
+    font-weight: 400;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+  }
+
+  #map {
+    height: 280px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    filter: grayscale(0.15) contrast(1.05);
+  }
+
+  .chart-wrap { height: 280px; }
+
+  .photo-wrap {
+    height: 280px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .photo-wrap img { width: 100%; height: 100%; object-fit: cover; display: none; }
+
+  .photo-empty {
+    color: var(--faint);
+    font-size: 12.5px;
+    font-family: var(--mono);
+    text-align: center;
+    padding: 0 20px;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
+
+  th {
+    text-align: left;
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--faint);
+    font-weight: 500;
+    padding: 0 10px 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  td {
+    padding: 9px 10px 9px 0;
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  tr:last-child td { border-bottom: none; }
+  tr:first-child td { color: var(--paper); }
+
+  .banner {
+    display: none;
+    font-size: 12.5px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--border);
+    color: var(--muted);
+    background: var(--panel-2);
+  }
+  .banner.show { display: block; }
+  .banner.demo { border-left-color: var(--amber); }
+  .banner.offline { border-left-color: var(--red); }
+  .banner code { font-family: var(--mono); color: var(--amber); }
+
+  @media (max-width: 760px) {
+    .grid-2 { grid-template-columns: 1fr; }
+    .readout .value { font-size: 36px; }
+    .coords-small { display: none; }
+  }
+
+  .auth-area { display: flex; align-items: center; }
+
+  .user-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 12px 4px 4px;
+  }
+
+  .user-chip img { width: 24px; height: 24px; border-radius: 50%; display: block; }
+
+  .user-chip span {
+    font-size: 12.5px;
+    color: var(--paper);
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dev-chip {
+    font-size: 11px;
+    font-family: var(--mono);
+    color: var(--amber);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 12px;
+  }
+
+  .logout-btn {
+    background: none;
+    border: none;
+    color: var(--faint);
+    font-size: 11px;
+    font-family: var(--sans);
+    cursor: pointer;
+    padding: 2px 2px 2px 4px;
+  }
+
+  .logout-btn:hover { color: var(--red); }
+</style>
+</head>
+<body>
+<div class="signal-bar"></div>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <span class="eyebrow">ESP32</span>
+      <h1>Monitor de campo</h1>
+      <select class="pivo-select" id="pivoSelect" aria-label="Escolher pivô"></select>
+    </div>
+    <div class="top-right">
+      <span class="clock" id="clock">--:--:--</span>
+      <span class="status-badge" id="statusBadge"><span class="dot pulsing" id="statusDot"></span><span id="statusText">conectando</span></span>
+      <div class="auth-area" id="authArea"></div>
+    </div>
+  </header>
+
+  <div class="banner" id="demoBanner"></div>
+
+  <div class="grid-2">
+    <div class="card accent-amber">
+      <div class="eyebrow"><span class="ch-num">CH.01</span>Temperatura</div>
+      <div class="readout">
+        <span class="value" id="tempValue">--</span>
+        <span class="unit">°C</span>
+        <span class="trend" id="tempTrend"></span>
+      </div>
+      <div class="meta-line" id="tempMeta">aguardando primeira leitura</div>
+      <div class="chart-wrap" style="height:150px;margin-top:18px"><canvas id="tempChart"></canvas></div>
+    </div>
+
+    <div class="card accent-teal">
+      <div class="eyebrow"><span class="ch-num">CH.02</span>Posição do pivô</div>
+      <div class="readout">
+        <span class="value" id="anguloValue">--</span>
+        <span class="unit">°</span>
+        <span class="trend" id="sentidoTrend"></span>
+      </div>
+      <div class="meta-line" id="anguloMeta">aguardando primeira leitura</div>
+
+      <div class="stats">
+        <div class="stat"><span class="k">Velocidade</span><span class="v" id="statVel">--</span></div>
+        <div class="stat"><span class="k">Volta completa</span><span class="v" id="statVolta">--</span></div>
+        <div class="stat"><span class="k">Raio</span><span class="v" id="statRaio">--</span></div>
+        <div class="stat"><span class="k">Área do círculo</span><span class="v" id="statArea">--</span></div>
+      </div>
+
+      <div class="progress-row"><span id="setorRotulo">Posição desde a referência</span><b id="statVarrido">--</b></div>
+      <div class="progress"><i id="progressBar"></i></div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <p class="panel-title">Vista de topo<span class="aside" id="calibNota">calibrando</span></p>
+      <div class="seg" id="segModo">
+        <button type="button" data-modo="referencia">posição</button>
+        <button type="button" data-modo="varredura">varrido na volta</button>
+      </div>
+      <div class="dial-wrap" id="dialWrap">
+        <div class="dial-empty" id="dialEmpty">aguardando pontos suficientes<br>para localizar o centro do pivô</div>
+      </div>
+    </div>
+    <div class="card">
+      <p class="panel-title">No terreno<span class="aside coords-small" id="coordsSmall">--</span></p>
+      <div id="map"></div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <p class="panel-title">Última foto da câmera</p>
+      <div class="photo-wrap">
+        <img id="fotoImg" alt="Última foto capturada pelo ESP32-CAM do pivô">
+        <div class="photo-empty" id="fotoEmpty">aguardando primeira foto</div>
+      </div>
+      <div class="meta-line" id="fotoMeta">aguardando primeira foto</div>
+    </div>
+    <div class="card">
+      <p class="panel-title">Últimas leituras</p>
+      <table>
+        <thead><tr><th>Horário</th><th>Ângulo</th><th>Temp.</th><th>Latitude</th><th>Longitude</th></tr></thead>
+        <tbody id="readingsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script>
+// ── Guarda de acesso ──────────────────────────────────────────
+// ATENÇÃO: isso é só um redirecionamento no navegador, NÃO é segurança de
+// verdade. Qualquer pessoa que souber a URL consegue burlar isso (ex:
+// desativando o JavaScript, ou chamando o backend direto). A proteção
+// real só existe quando o backend passar a validar sessão/token — decisão
+// pendente registrada no SEGURANCA.md. Por enquanto isso é só um "portão"
+// de UX: manda quem não passou pelo login (index.html) de volta pra lá.
+if (!localStorage.getItem('pivo_user') && !localStorage.getItem('pivo_dev_bypass')) {
+  window.location.href = 'index.html';
+}
+
+// ── Configuração ──────────────────────────────────────────────
+const CONFIG = {
+  // Backend Flask na VM Oracle (rota que devolve a última leitura).
+  API_URL: 'http://167.126.23.215:5000/leitura/ultima',
+  // Teste: 5000-10000 (5-10s). Produção: 600000-900000 (10-15min) — diretriz do Omar.
+  POLL_INTERVAL_MS: 10000,
+  // Rota que devolve a última foto (JPEG cru) tirada pelo ESP32-CAM. null = esconde o card.
+  FOTO_URL: 'http://167.126.23.215:5000/foto/ultima',
+  FOTO_POLL_INTERVAL_MS: 15000,
+
+  // ── Geometria do pivô ───────────────────────────────────────
+  // O ponto de pivô NUNCA se move: se você for até ele uma vez e anotar a
+  // coordenada (dá pra ler no Google Maps ou no GPS do celular), preencha
+  // 'centro' aqui e o painel fica preciso desde a primeira leitura.
+  //   centro: { latitude: -15.7801, longitude: -47.9292 }
+  // Deixando null, o painel estima o centro ajustando um círculo aos pontos
+  // recebidos — mas isso só fica confiável depois de ~120° de arco percorrido
+  // (com 60° o centro ainda erra ~10 m; com 30°, mais de 100 m).
+  PIVO: {
+    centro: null,
+    // Raio em metros. null = calcula pela distância mediana até o centro.
+    raio: null,
+
+    // ── A fatia amarela ─────────────────────────────────────
+    // 'referencia': a borda fixa da fatia fica sempre no mesmo rumo e a fatia
+    //   mede a POSIÇÃO do pivô (é o desenho do croqui: uma linha fixa apontando
+    //   pra cima e a coordenada móvel do outro lado).
+    // 'varredura': a borda fixa é onde a volta atual começou, então a fatia
+    //   mede QUANTO JÁ FOI IRRIGADO nesta volta e zera a cada volta completa.
+    modoSetor: 'referencia',
+    // Rumo da borda fixa, em graus de bússola. 0 = norte. Se o pivô tem um
+    // ponto de partida marcado no campo (o poste do fim de curso), medir o
+    // rumo dele a partir do centro e pôr aqui faz o painel falar a mesma
+    // língua que o quadro de comando da máquina.
+    referencia: 0,
+  },
+
+  // Nome amigável por device_id, pra quando houver mais de um pivô.
+  NOMES: { 'pivo-01': 'Pivô 01 · teste' },
+};
+
+const REF_POINT = { lat: -15.7801, lng: -47.9292 }; // referência só do modo demonstração
+const DEVICE_PADRAO = 'pivo-01';
+
+// ── Geometria ─────────────────────────────────────────────────
+// Tudo em plano tangente local: perto do pivô (centenas de metros) a curvatura
+// da Terra é irrelevante, então converter graus→metros com fator fixo já dá
+// precisão bem melhor que a do próprio GPS.
+const M_POR_GRAU_LAT = 110574;
+const mPorGrauLng = (lat) => 111320 * Math.cos((lat * Math.PI) / 180);
+
+function paraMetros(p, origem) {
+  return {
+    x: (p.longitude - origem.longitude) * mPorGrauLng(origem.latitude),
+    y: (p.latitude - origem.latitude) * M_POR_GRAU_LAT,
+  };
+}
+
+function paraGraus(m, origem) {
+  return {
+    latitude: origem.latitude + m.y / M_POR_GRAU_LAT,
+    longitude: origem.longitude + m.x / mPorGrauLng(origem.latitude),
+  };
+}
+
+// Ângulo de bússola: 0° = norte, crescendo no sentido horário.
+function anguloDe(m) {
+  return ((Math.atan2(m.x, m.y) * 180) / Math.PI + 360) % 360;
+}
+
+// Diferença angular curta, sempre entre -180 e +180. Resolve a virada do 359→0.
+function deltaAngulo(a, b) {
+  return ((b - a + 540) % 360) - 180;
+}
+
+// Ajuste algébrico de círculo (método de Kåsa): minimiza (x²+y² - Ax - By - C)².
+// Linear, então é uma resolução direta de sistema 3x3 — sem iteração.
+function ajustarCirculo(pontos) {
+  const n = pontos.length;
+  if (n < 5) return null;
+  let Sx = 0, Sy = 0, Sxx = 0, Syy = 0, Sxy = 0, Sxz = 0, Syz = 0, Sz = 0;
+  for (const p of pontos) {
+    const z = p.x * p.x + p.y * p.y;
+    Sx += p.x; Sy += p.y; Sxx += p.x * p.x; Syy += p.y * p.y;
+    Sxy += p.x * p.y; Sxz += p.x * z; Syz += p.y * z; Sz += z;
+  }
+  const M = [[Sxx, Sxy, Sx], [Sxy, Syy, Sy], [Sx, Sy, n]];
+  const V = [Sxz, Syz, Sz];
+  const det = (m) =>
+    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+    m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+    m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+  const D = det(M);
+  if (Math.abs(D) < 1e-9) return null;
+  const troca = (col) => M.map((linha, i) => linha.map((v, j) => (j === col ? V[i] : v)));
+  const cx = det(troca(0)) / D / 2;
+  const cy = det(troca(1)) / D / 2;
+  const sob = det(troca(2)) / D + cx * cx + cy * cy;
+  if (sob <= 0) return null;
+  return { cx, cy, r: Math.sqrt(sob) };
+}
+
+// Quanto do círculo os pontos cobrem. Um pivô parado num canto dá arco ~0 e
+// nesse caso qualquer centro "cabe" nos dados — daí o corte de confiança.
+function arcoCoberto(angulos) {
+  if (angulos.length < 3) return 0;
+  const ord = [...angulos].sort((a, b) => a - b);
+  let maiorVao = (ord[0] + 360) - ord[ord.length - 1];
+  for (let i = 1; i < ord.length; i++) maiorVao = Math.max(maiorVao, ord[i] - ord[i - 1]);
+  return Math.max(0, 360 - maiorVao);
+}
+
+function mediana(v) {
+  const s = [...v].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+// ── Estado ────────────────────────────────────────────────────
+// Um balde por device_id, então o dia em que o backend mandar vários pivôs
+// nada aqui precisa mudar — só o seletor no cabeçalho aparece.
+const pivos = {};
+let ativo = DEVICE_PADRAO;
+
+function balde(id) {
+  if (!pivos[id]) {
+    pivos[id] = { leituras: [], calib: null, varredura: 0, anguloInicio: null };
+  }
+  return pivos[id];
+}
+
+function formatTime(date) {
+  return date.toLocaleTimeString('pt-BR', { hour12: false });
+}
+
+function timeAgo(date) {
+  const s = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (s < 5) return 'agora mesmo';
+  if (s < 60) return `há ${s}s`;
+  return `há ${Math.floor(s / 60)}min`;
+}
+
+function duracao(horas) {
+  if (!isFinite(horas) || horas <= 0) return '--';
+  if (horas < 1) return `${Math.round(horas * 60)}min`;
+  const h = Math.floor(horas);
+  const min = Math.round((horas - h) * 60);
+  return min ? `${h}h${String(min).padStart(2, '0')}` : `${h}h`;
+}
+
+function normalizeReading(raw) {
+  // O backend manda 'criado_em' (não 'timestamp') e ainda NÃO manda
+  // 'temperatura' nem 'device_id'. Tratamos todos os casos aqui.
+  const quando = raw.criado_em ?? raw.timestamp;
+  const temp = raw.temperatura;
+  return {
+    device: String(raw.device_id ?? raw.dispositivo ?? DEVICE_PADRAO),
+    timestamp: quando ? new Date(quando) : new Date(),
+    temperatura: (temp === undefined || temp === null) ? null : Number(temp),
+    latitude: Number(raw.latitude),
+    longitude: Number(raw.longitude),
+  };
+}
+
+// ── Calibração ────────────────────────────────────────────────
+// Descobre centro e raio. Recalcula a cada leitura nova enquanto a confiança
+// não está boa; depois disso trava, pra imagem parar de tremer na tela.
+function calibrar(p) {
+  const pts = p.leituras.filter(r => isFinite(r.latitude) && isFinite(r.longitude));
+  if (!pts.length) return;
+
+  if (CONFIG.PIVO.centro) {
+    const centro = CONFIG.PIVO.centro;
+    const dists = pts.map(r => { const m = paraMetros(r, centro); return Math.hypot(m.x, m.y); });
+    p.calib = {
+      centro,
+      raio: CONFIG.PIVO.raio ?? mediana(dists),
+      fonte: 'manual',
+      confianca: 'centro medido em campo',
+      travada: true,
+    };
+    return;
+  }
+
+  if (p.calib && p.calib.travada) return;
+  if (pts.length < 6) return;
+
+  const origem = pts[0];
+  const fit = ajustarCirculo(pts.map(r => paraMetros(r, origem)));
+  if (!fit || fit.r < 20 || fit.r > 1200) return;
+
+  const centro = paraGraus({ x: fit.cx, y: fit.cy }, origem);
+  const dists = pts.map(r => { const m = paraMetros(r, centro); return Math.hypot(m.x, m.y); });
+  const desvio = Math.sqrt(dists.reduce((s, d) => s + (d - fit.r) ** 2, 0) / dists.length);
+
+  // Teste de sanidade que NÃO depende do centro estimado: se os pontos não
+  // ficam todos à mesma distância dele, ele não é o centro. Precisa vir antes
+  // da checagem de arco — com um centro errado os pontos parecem dar a volta
+  // nele, e o arco sozinho aprova ajustes absurdos (visto no teste: centro
+  // 260 m fora, raio de 30 m, e mesmo assim "confiança boa").
+  // Ruído de GPS típico dá desvio de ~1,5% do raio; 5% já é folga larga.
+  if (desvio > Math.min(25, fit.r * 0.05)) return;
+
+  const angulos = pts.map(r => anguloDe(paraMetros(r, centro)));
+  const arco = arcoCoberto(angulos);
+  // Abaixo de ~90° de arco o ajuste é chute, não estimativa: medindo contra um
+  // pivô simulado, 30° de arco erram o centro em mais de 100 m e 60° ainda
+  // erram ~11 m — o bastante para o sentido de giro aparecer trocado na tela.
+  if (arco < 90) return;
+
+  p.calib = {
+    centro,
+    raio: CONFIG.PIVO.raio ?? fit.r,
+    fonte: 'estimado',
+    arco,
+    desvio,
+    confianca: arco >= 240 ? 'ótima' : arco >= 120 ? 'boa' : 'aproximada',
+    travada: arco >= 300 && desvio < fit.r * 0.05,
+  };
+}
+
+// Série "rala": um ponto a cada N minutos, no máximo.
+// Motivo: o ruído do GPS (±4 m num raio de 300 m ≈ ±0,7°) vira um passeio
+// aleatório se você somar a diferença entre leituras de 10 em 10 segundos —
+// o pivô parece girar sozinho. Espaçando os pontos, o movimento real domina
+// o ruído. Um pivô a 15°/h anda 1,2° em 5min, bem acima do ruído.
+function serieRala(leituras, minutos) {
+  const pts = leituras.filter(r => isFinite(r.angulo));
+  if (pts.length < 2) return pts;
+  const passo = minutos * 60 * 1000;
+  const saida = [pts[0]];
+  for (const r of pts) {
+    if (r.timestamp - saida[saida.length - 1].timestamp >= passo) saida.push(r);
+  }
+  const ultima = pts[pts.length - 1];
+  if (saida[saida.length - 1] !== ultima) saida.push(ultima);
+  return saida;
+}
+
+// Soma as diferenças curtas ao longo da série — assim uma passagem de 359°
+// para 1° conta como +2°, e não como -358°.
+function somarVarredura(serie) {
+  let total = 0;
+  for (let i = 1; i < serie.length; i++) total += deltaAngulo(serie[i - 1].angulo, serie[i].angulo);
+  return total;
+}
+
+// Anota o ângulo em cada leitura e recalcula a varredura da volta atual.
+// Recalculamos SEMPRE do zero em vez de ir somando: enquanto a estimativa do
+// centro ainda muda, todos os ângulos mudam junto, e um acumulador incremental
+// carregaria deltas calculados com um centro velho (isso chegou a inverter o
+// sentido de giro na tela durante os testes).
+function atualizarAngulos(p) {
+  if (!p.calib) return;
+  p.leituras.forEach(r => { r.angulo = anguloDe(paraMetros(r, p.calib.centro)); });
+
+  const serie = serieRala(p.leituras, 3);
+  if (serie.length < 2) return;
+
+  const total = somarVarredura(serie);
+  // Passou de uma volta inteira? O resto é o quanto já andou na volta atual.
+  p.varredura = total % 360;
+  p.anguloInicio = serie[serie.length - 1].angulo - p.varredura;
+  p.varreduraTotal = total;
+}
+
+// Velocidade angular sobre a maior janela disponível, até 90min.
+function velocidadeAngular(p) {
+  const pts = p.leituras.filter(r => isFinite(r.angulo));
+  if (pts.length < 3) return null;
+  const fim = pts[pts.length - 1];
+  const limite = fim.timestamp.getTime() - 90 * 60 * 1000;
+  const janela = serieRala(pts.filter(r => r.timestamp.getTime() >= limite), 3);
+  if (janela.length < 2) return null;
+
+  const horas = (fim.timestamp - janela[0].timestamp) / 3600000;
+  // Janela curta demais: o ruído do GPS dominaria a conta. Melhor dizer que
+  // está medindo do que mostrar "312°/h" e assustar quem está lendo.
+  if (horas < 10 / 60) return { medindo: true };
+
+  return { grausPorHora: somarVarredura(janela) / horas, janelaMin: horas * 60 };
+}
+
+// Qual fatia desenhar. É a única fonte da verdade — dial, mapa e o número na
+// tela derivam daqui, então os três nunca discordam entre si.
+function setorAtual(p, angulo) {
+  if (CONFIG.PIVO.modoSetor === 'varredura') {
+    return {
+      de: p.anguloInicio ?? angulo,
+      varre: p.varredura,
+      rotulo: 'Varrido nesta volta',
+    };
+  }
+  const ref = CONFIG.PIVO.referencia || 0;
+  // Sempre medido no sentido horário a partir da referência, 0° a 360°:
+  // é uma posição, não um acumulado, então não faz sentido ser negativo.
+  return {
+    de: ref,
+    varre: (((angulo - ref) % 360) + 360) % 360,
+    rotulo: 'Posição desde a referência',
+  };
+}
+
+// ── Vista de topo (SVG) ───────────────────────────────────────
+const DIAL = { cx: 120, cy: 120, r: 88 };
+
+function pontoDial(anguloGraus, raio) {
+  const a = (anguloGraus * Math.PI) / 180;
+  return [DIAL.cx + raio * Math.sin(a), DIAL.cy - raio * Math.cos(a)];
+}
+
+function caminhoSetor(de, varredura) {
+  const R = DIAL.r;
+  if (Math.abs(varredura) < 0.5) return '';
+  if (Math.abs(varredura) >= 359.5) {
+    return `M ${DIAL.cx} ${DIAL.cy - R} A ${R} ${R} 0 1 1 ${DIAL.cx - 0.01} ${DIAL.cy - R} Z`;
+  }
+  const ate = de + varredura;
+  const [x1, y1] = pontoDial(de, R);
+  const [x2, y2] = pontoDial(ate, R);
+  const arcoGrande = Math.abs(varredura) > 180 ? 1 : 0;
+  const sentido = varredura > 0 ? 1 : 0;
+  return `M ${DIAL.cx} ${DIAL.cy} L ${x1} ${y1} A ${R} ${R} 0 ${arcoGrande} ${sentido} ${x2} ${y2} Z`;
+}
+
+// O SVG é montado UMA vez. Depois só mudamos o ângulo do braço e o setor —
+// assim a rotação pode ser animada pelo CSS em vez de pular a cada leitura.
+function montarDial() {
+  let ticks = '';
+  for (let a = 0; a < 360; a += 30) {
+    const cardeal = a % 90 === 0;
+    const [x1, y1] = pontoDial(a, DIAL.r);
+    const [x2, y2] = pontoDial(a, DIAL.r - (cardeal ? 10 : 5));
+    ticks += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#2A323A" stroke-width="${cardeal ? 1.5 : 1}"/>`;
+  }
+
+  let rotulos = '';
+  [[0, 'N'], [90, 'L'], [180, 'S'], [270, 'O']].forEach(([a, txt]) => {
+    const [x, y] = pontoDial(a, DIAL.r + 15);
+    rotulos += `<text x="${x.toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="middle" font-size="11" fill="#6B7280">${txt}</text>`;
+  });
+
+  const [rx, ry] = pontoDial(CONFIG.PIVO.referencia || 0, DIAL.r);
+
+  document.getElementById('dialWrap').innerHTML = `
+    <svg viewBox="0 0 240 240" role="img" aria-label="Vista de topo do pivô" id="dialSvg">
+      <circle cx="${DIAL.cx}" cy="${DIAL.cy}" r="${DIAL.r}" fill="rgba(63,184,175,0.04)" stroke="#2A323A" stroke-width="1"/>
+      <path id="dialSetor" d="" fill="rgba(255,176,32,0.14)" stroke="rgba(255,176,32,0.35)" stroke-width="1"/>
+      ${ticks}
+      ${rotulos}
+      <line id="dialRef" x1="${DIAL.cx}" y1="${DIAL.cy}" x2="${rx.toFixed(1)}" y2="${ry.toFixed(1)}"
+            stroke="#3FB8AF" stroke-width="1.5" stroke-dasharray="3 4" opacity="0.7"/>
+      <g class="arm" id="dialArm" style="transform-origin: ${DIAL.cx}px ${DIAL.cy}px;">
+        <line x1="${DIAL.cx}" y1="${DIAL.cy}" x2="${DIAL.cx}" y2="${DIAL.cy - DIAL.r}" stroke="#FFB020" stroke-width="2.5" stroke-linecap="round"/>
+        <circle cx="${DIAL.cx}" cy="${DIAL.cy - DIAL.r}" r="5" fill="#FFB020"/>
+      </g>
+      <circle cx="${DIAL.cx}" cy="${DIAL.cy}" r="4" fill="#3FB8AF"/>
+      <circle cx="${DIAL.cx}" cy="${DIAL.cy}" r="9" fill="none" stroke="#3FB8AF" stroke-width="1" opacity="0.4"/>
+    </svg>`;
+}
+
+// Ângulo desenrolado: se o pivô passa de 359° para 1°, girar o braço "para
+// trás" 358° ficaria feio. Somamos voltas para ele sempre seguir em frente.
+let anguloDesenrolado = null;
+
+function desenharDial(p) {
+  const wrap = document.getElementById('dialWrap');
+  const ultima = p.leituras[p.leituras.length - 1];
+
+  if (!p.calib || !ultima || !isFinite(ultima.angulo)) {
+    const faltam = Math.max(0, 6 - p.leituras.length);
+    wrap.innerHTML = '<div class="dial-empty" id="dialEmpty"></div>';
+    document.getElementById('dialEmpty').textContent = faltam
+      ? `aguardando leituras · faltam ${faltam}`
+      : 'o pivô precisa girar um pouco para o centro ser localizado';
+    anguloDesenrolado = null;
+    return;
+  }
+
+  if (!document.getElementById('dialSvg')) {
+    montarDial();
+    anguloDesenrolado = ultima.angulo;
+  } else {
+    anguloDesenrolado += deltaAngulo(((anguloDesenrolado % 360) + 360) % 360, ultima.angulo);
+  }
+
+  const s = setorAtual(p, ultima.angulo);
+  document.getElementById('dialArm').style.transform = `rotate(${anguloDesenrolado.toFixed(2)}deg)`;
+  document.getElementById('dialSetor').setAttribute('d', caminhoSetor(s.de, s.varre));
+  document.getElementById('dialSvg').setAttribute('aria-label',
+    `Vista de topo: pivô no ângulo ${Math.round(ultima.angulo)} graus, fatia de ${Math.round(Math.abs(s.varre))} graus`);
+}
+
+// ── Mapa ──────────────────────────────────────────────────────
+let map, camadaPivo, rastro;
+
+function initMap(lat, lng) {
+  map = L.map('map', { zoomControl: true }).setView([lat, lng], 15);
+  const tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap',
+    maxZoom: 19,
+  }).addTo(map);
+  let tileErrorShown = false;
+  tiles.on('tileerror', () => {
+    if (tileErrorShown) return;
+    tileErrorShown = true;
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:11px;color:var(--faint);margin-top:8px;';
+    note.textContent = 'As imagens do mapa não carregaram aqui — se estiver vendo isso na pré-visualização do chat, abra o arquivo baixado direto no navegador.';
+    document.getElementById('map').insertAdjacentElement('afterend', note);
+  });
+  camadaPivo = L.layerGroup().addTo(map);
+  rastro = L.polyline([], { color: '#3FB8AF', weight: 1, opacity: 0.25 }).addTo(map);
+}
+
+function updateMap(p) {
+  const ultima = p.leituras[p.leituras.length - 1];
+  if (!ultima) return;
+  if (!map) initMap(ultima.latitude, ultima.longitude);
+
+  rastro.setLatLngs(p.leituras.map(r => [r.latitude, r.longitude]));
+  camadaPivo.clearLayers();
+
+  if (!p.calib) {
+    L.circleMarker([ultima.latitude, ultima.longitude], {
+      radius: 7, color: '#FFB020', weight: 2, fillColor: '#FFB020', fillOpacity: 0.5,
+    }).addTo(camadaPivo);
+    map.panTo([ultima.latitude, ultima.longitude]);
+    return;
+  }
+
+  const c = p.calib.centro;
+  const R = p.calib.raio;
+
+  // O talhão: círculo que a máquina cobre.
+  L.circle([c.latitude, c.longitude], {
+    radius: R, color: '#3FB8AF', weight: 1.5, opacity: 0.7,
+    fillColor: '#3FB8AF', fillOpacity: 0.05, dashArray: '4 5',
+  }).addTo(camadaPivo);
+
+  // A fatia — mesma origem de cálculo do dial, para os dois nunca discordarem.
+  const s = isFinite(ultima.angulo) ? setorAtual(p, ultima.angulo) : null;
+  if (s && Math.abs(s.varre) > 1) {
+    const passos = Math.max(8, Math.round(Math.abs(s.varre) / 4));
+    const cantos = [[c.latitude, c.longitude]];
+    for (let i = 0; i <= passos; i++) {
+      const a = s.de + (s.varre * i) / passos;
+      const rad = (a * Math.PI) / 180;
+      const pt = paraGraus({ x: R * Math.sin(rad), y: R * Math.cos(rad) }, c);
+      cantos.push([pt.latitude, pt.longitude]);
+    }
+    L.polygon(cantos, { color: '#FFB020', weight: 0, fillColor: '#FFB020', fillOpacity: 0.12 }).addTo(camadaPivo);
+  }
+
+  // A borda fixa da fatia, tracejada — a "coordenada de referência".
+  if (s) {
+    const rad = (s.de * Math.PI) / 180;
+    const pRef = paraGraus({ x: R * Math.sin(rad), y: R * Math.cos(rad) }, c);
+    L.polyline([[c.latitude, c.longitude], [pRef.latitude, pRef.longitude]], {
+      color: '#3FB8AF', weight: 1.5, opacity: 0.7, dashArray: '4 5',
+    }).addTo(camadaPivo);
+  }
+
+  // O braço: do centro até a torre onde está o GPS.
+  L.polyline([[c.latitude, c.longitude], [ultima.latitude, ultima.longitude]], {
+    color: '#FFB020', weight: 3, opacity: 0.9,
+  }).addTo(camadaPivo);
+
+  L.circleMarker([c.latitude, c.longitude], {
+    radius: 4, color: '#3FB8AF', weight: 2, fillColor: '#14181C', fillOpacity: 1,
+  }).addTo(camadaPivo).bindTooltip('ponto de pivô');
+
+  L.circleMarker([ultima.latitude, ultima.longitude], {
+    radius: 6, color: '#FFB020', weight: 2, fillColor: '#FFB020', fillOpacity: 0.6,
+  }).addTo(camadaPivo).bindTooltip('torre com GPS');
+
+  if (!map._enquadrou) {
+    // Não dá pra chamar .getBounds() num L.circle que ainda não foi
+    // adicionado ao mapa (Leaflet precisa da projeção do mapa pra isso, e
+    // lança "Cannot read properties of undefined (reading
+    // 'layerPointToLatLng')" — visto rodando no navegador). Calculamos o
+    // retângulo à mão com as mesmas funções de conversão metros↔graus.
+    const ne = paraGraus({ x: R * 1.15, y: R * 1.15 }, c);
+    const so = paraGraus({ x: -R * 1.15, y: -R * 1.15 }, c);
+    map.fitBounds([[so.latitude, so.longitude], [ne.latitude, ne.longitude]]);
+    map._enquadrou = true;
+  }
+}
+
+// ── Gráfico ───────────────────────────────────────────────────
+let chart;
+function initChart() {
+  const ctx = document.getElementById('tempChart').getContext('2d');
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{ data: [], borderColor: '#FFB020', backgroundColor: 'rgba(255,176,32,0.08)', borderWidth: 2, pointRadius: 0, tension: 0.3, fill: true }] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#6B7280', maxTicksLimit: 5, font: { size: 10 } }, grid: { color: '#2A323A' } },
+        y: { ticks: { color: '#6B7280', font: { size: 10 } }, grid: { color: '#2A323A' } },
+      },
+    },
+  });
+}
+
+function updateChart(p) {
+  const recent = p.leituras.slice(-20);
+  chart.data.labels = recent.map(r => formatTime(r.timestamp));
+  chart.data.datasets[0].data = recent.map(r => r.temperatura);
+  chart.update();
+}
+
+function flashEl(el) {
+  el.classList.remove('flash');
+  void el.offsetWidth;
+  el.classList.add('flash');
+}
+
+// ── Cards ─────────────────────────────────────────────────────
+function updateCards(p) {
+  const latest = p.leituras[p.leituras.length - 1];
+  const prev = p.leituras[p.leituras.length - 2];
+  if (!latest) return;
+
+  // Temperatura
+  const tempEl = document.getElementById('tempValue');
+  const temValor = typeof latest.temperatura === 'number' && !isNaN(latest.temperatura);
+  tempEl.textContent = temValor ? latest.temperatura.toFixed(1) : '--';
+  flashEl(tempEl);
+  document.getElementById('tempMeta').textContent = temValor
+    ? `atualizado ${timeAgo(latest.timestamp)}`
+    : 'sensor de temperatura ainda não instalado';
+
+  const trendEl = document.getElementById('tempTrend');
+  const temPrev = prev && typeof prev.temperatura === 'number' && !isNaN(prev.temperatura);
+  if (temValor && temPrev) {
+    const diff = Math.round((latest.temperatura - prev.temperatura) * 10) / 10;
+    if (diff > 0) { trendEl.textContent = `▲ ${diff.toFixed(1)}`; trendEl.className = 'trend up'; }
+    else if (diff < 0) { trendEl.textContent = `▼ ${Math.abs(diff).toFixed(1)}`; trendEl.className = 'trend down'; }
+    else trendEl.textContent = '';
+  } else {
+    trendEl.textContent = '';
+  }
+
+  // Ângulo
+  const angEl = document.getElementById('anguloValue');
+  const sentidoEl = document.getElementById('sentidoTrend');
+  const vel = velocidadeAngular(p);
+
+  if (p.calib && isFinite(latest.angulo)) {
+    angEl.textContent = latest.angulo.toFixed(1);
+    flashEl(angEl);
+    document.getElementById('anguloMeta').textContent = `atualizado ${timeAgo(latest.timestamp)}`;
+    if (vel && vel.grausPorHora !== undefined && Math.abs(vel.grausPorHora) >= 0.5) {
+      const horario = vel.grausPorHora > 0;
+      sentidoEl.textContent = horario ? '↻ horário' : '↺ anti-horário';
+      sentidoEl.className = horario ? 'trend up' : 'trend down';
+    } else if (vel && vel.medindo) {
+      sentidoEl.textContent = 'medindo…';
+      sentidoEl.className = 'trend';
+    } else {
+      sentidoEl.textContent = '■ parado';
+      sentidoEl.className = 'trend';
+    }
+  } else {
+    angEl.textContent = '--';
+    sentidoEl.textContent = '';
+    document.getElementById('anguloMeta').textContent = 'localizando o centro do pivô';
+  }
+
+  // Estatísticas derivadas
+  const R = p.calib ? p.calib.raio : null;
+  if (vel && vel.grausPorHora !== undefined) {
+    const gph = Math.abs(vel.grausPorHora);
+    const mph = R ? (gph * Math.PI / 180) * R : null;
+    document.getElementById('statVel').innerHTML =
+      `${gph.toFixed(1)}<small>°/h</small>` + (mph ? ` · ${mph.toFixed(0)}<small>m/h</small>` : '');
+    document.getElementById('statVolta').textContent = gph >= 0.5 ? duracao(360 / gph) : 'parado';
+  } else {
+    document.getElementById('statVel').textContent = vel && vel.medindo ? 'medindo…' : '--';
+    document.getElementById('statVolta').textContent = '--';
+  }
+
+  document.getElementById('statRaio').innerHTML = R ? `${R.toFixed(0)}<small>m</small>` : '--';
+  document.getElementById('statArea').innerHTML = R
+    ? `${(Math.PI * R * R / 10000).toFixed(1)}<small>ha</small>` : '--';
+
+  const ultimaAng = p.calib && isFinite(latest.angulo) ? latest.angulo : null;
+  const s = ultimaAng !== null ? setorAtual(p, ultimaAng) : null;
+  const pct = s ? Math.min(100, Math.abs(s.varre) / 3.6) : 0;
+  document.getElementById('setorRotulo').textContent = s ? s.rotulo : 'Fatia';
+  document.getElementById('statVarrido').textContent = s
+    ? `${Math.abs(s.varre).toFixed(0)}° · ${pct.toFixed(0)}%` : '--';
+  document.getElementById('progressBar').style.width = pct + '%';
+
+  // Nota de calibração
+  const nota = document.getElementById('calibNota');
+  if (!p.calib) {
+    nota.textContent = 'calibrando';
+  } else if (p.calib.fonte === 'manual') {
+    nota.textContent = 'centro fixo · configurado';
+  } else {
+    nota.textContent = `centro estimado · ${p.calib.confianca} (±${p.calib.desvio.toFixed(1)}m)`;
+  }
+
+  document.getElementById('coordsSmall').textContent =
+    `${latest.latitude.toFixed(5)}, ${latest.longitude.toFixed(5)}`;
+
+  // Tabela
+  const body = document.getElementById('readingsBody');
+  body.innerHTML = '';
+  p.leituras.slice(-8).reverse().forEach(r => {
+    const tr = document.createElement('tr');
+    const tempCel = (typeof r.temperatura === 'number' && !isNaN(r.temperatura)) ? `${r.temperatura.toFixed(1)}°C` : '—';
+    const angCel = isFinite(r.angulo) ? `${r.angulo.toFixed(1)}°` : '—';
+    // Cada célula é criada e preenchida via textContent (nunca innerHTML com dado
+    // vindo da API) — evita XSS caso um campo de texto (ex: device_id) venha malicioso.
+    [formatTime(r.timestamp), angCel, tempCel, r.latitude.toFixed(5), r.longitude.toFixed(5)].forEach(valor => {
+      const td = document.createElement('td');
+      td.textContent = valor;
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+}
+
+// ── Seletor de pivô ───────────────────────────────────────────
+function renderSeletor() {
+  const ids = Object.keys(pivos);
+  const sel = document.getElementById('pivoSelect');
+  sel.classList.toggle('show', ids.length > 1);
+  if (ids.length <= 1) return;
+  if (sel.options.length === ids.length) return;
+  sel.innerHTML = '';
+  ids.forEach(id => {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = CONFIG.NOMES[id] ?? id;
+    if (id === ativo) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+document.getElementById('pivoSelect').addEventListener('change', (e) => {
+  ativo = e.target.value;
+  if (map) { map._enquadrou = false; }
+  redesenhar();
+});
+
+// ── Alternador da fatia ───────────────────────────────────────
+document.getElementById('segModo').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-modo]');
+  if (!btn) return;
+  CONFIG.PIVO.modoSetor = btn.dataset.modo;
+  marcarModo();
+  redesenhar();
+});
+
+function marcarModo() {
+  document.querySelectorAll('#segModo button').forEach(b => {
+    const ativoAqui = b.dataset.modo === CONFIG.PIVO.modoSetor;
+    b.classList.toggle('on', ativoAqui);
+    b.setAttribute('aria-pressed', ativoAqui ? 'true' : 'false');
+  });
+}
+
+// ── Status ────────────────────────────────────────────────────
+function setStatus(mode) {
+  const badge = document.getElementById('statusBadge');
+  const text = document.getElementById('statusText');
+  const banner = document.getElementById('demoBanner');
+  badge.classList.remove('live', 'offline');
+  banner.classList.remove('demo', 'offline');
+  if (mode === 'live') {
+    badge.classList.add('live');
+    text.textContent = 'ao vivo';
+    banner.classList.remove('show');
+  } else if (mode === 'offline') {
+    badge.classList.add('offline');
+    text.textContent = 'sem conexão';
+    banner.innerHTML = 'Não foi possível falar com <code>CONFIG.API_URL</code> — mostrando dados de exemplo até a conexão voltar.';
+    banner.classList.add('show', 'offline');
+  } else {
+    text.textContent = 'demonstração';
+    banner.innerHTML = 'Sem API configurada — pivô simulado girando em volta de um centro fixo. Defina <code>CONFIG.API_URL</code> para conectar ao backend Flask.';
+    banner.classList.add('show', 'demo');
+  }
+}
+
+// ── Área de conta ────────────────────────────────────────────
+function sair() {
+  localStorage.removeItem('pivo_user');
+  localStorage.removeItem('pivo_dev_bypass');
+  window.location.href = 'index.html';
+}
+
+function renderAuthArea() {
+  const area = document.getElementById('authArea');
+  area.innerHTML = '';
+
+  const salvo = localStorage.getItem('pivo_user');
+  if (salvo) {
+    let usuario;
+    try { usuario = JSON.parse(salvo); } catch (err) { sair(); return; }
+
+    const chip = document.createElement('div');
+    chip.className = 'user-chip';
+
+    const img = document.createElement('img');
+    img.src = usuario.foto;
+    img.alt = '';
+    chip.appendChild(img);
+
+    const nome = document.createElement('span');
+    nome.textContent = usuario.nome;
+    chip.appendChild(nome);
+
+    const sairBtn = document.createElement('button');
+    sairBtn.className = 'logout-btn';
+    sairBtn.textContent = 'sair';
+    sairBtn.onclick = sair;
+    chip.appendChild(sairBtn);
+
+    area.appendChild(chip);
+    return;
+  }
+
+  if (localStorage.getItem('pivo_dev_bypass')) {
+    const dev = document.createElement('span');
+    dev.className = 'dev-chip';
+    dev.textContent = 'modo dev · sem login';
+    area.appendChild(dev);
+
+    const sairBtn = document.createElement('button');
+    sairBtn.className = 'logout-btn';
+    sairBtn.textContent = 'sair';
+    sairBtn.onclick = sair;
+    area.appendChild(sairBtn);
+  }
+}
+
+// ── Foto ──────────────────────────────────────────────────────
+let fotoAtualizadaEm = null;
+
+function updateFotoMeta() {
+  const meta = document.getElementById('fotoMeta');
+  if (!meta) return;
+  meta.textContent = fotoAtualizadaEm ? `atualizado ${timeAgo(fotoAtualizadaEm)}` : 'aguardando primeira foto';
+}
+
+function pollFoto() {
+  if (!CONFIG.FOTO_URL) return;
+  const img = document.getElementById('fotoImg');
+  const empty = document.getElementById('fotoEmpty');
+  // Carrega numa Image() separada antes de trocar o <img> visível — assim, se a
+  // rota ainda não tiver foto (404) ou o backend estiver fora, mantém a última
+  // foto boa na tela em vez de piscar/quebrar.
+  const proxy = new Image();
+  proxy.onload = () => {
+    img.src = proxy.src;
+    img.style.display = 'block';
+    empty.style.display = 'none';
+    fotoAtualizadaEm = new Date();
+    updateFotoMeta();
+  };
+  proxy.onerror = () => {
+    if (!fotoAtualizadaEm) empty.textContent = 'nenhuma foto ainda — câmera não enviou nada pro backend';
+  };
+  proxy.src = CONFIG.FOTO_URL + '?t=' + Date.now();
+}
+
+// ── Demonstração ──────────────────────────────────────────────
+// Pivô sintético: centro fixo, raio 320 m, girando. A velocidade é exagerada
+// (uma volta a cada ~12min em vez de 12-24h) só pra dar pra ver acontecendo.
+const DEMO = { raio: 320, grausPorMs: 360 / (12 * 60 * 1000), ruidoM: 4 };
+
+function demoLeitura(quando, anguloBase) {
+  const rad = (anguloBase * Math.PI) / 180;
+  const jx = (Math.random() - 0.5) * 2 * DEMO.ruidoM;
+  const jy = (Math.random() - 0.5) * 2 * DEMO.ruidoM;
+  const pos = paraGraus(
+    { x: DEMO.raio * Math.sin(rad) + jx, y: DEMO.raio * Math.cos(rad) + jy },
+    { latitude: REF_POINT.lat, longitude: REF_POINT.lng }
+  );
+  return {
+    device: DEVICE_PADRAO,
+    timestamp: quando,
+    temperatura: Math.round((24 + Math.sin(quando.getTime() / 6e5) * 2 + Math.random() * 0.4) * 10) / 10,
+    latitude: pos.latitude,
+    longitude: pos.longitude,
+  };
+}
+
+function semearDemo(p) {
+  // 30 pontos cobrindo ~150° de arco: já entra calibrado, sem esperar meia hora.
+  const agora = Date.now();
+  for (let i = 29; i >= 0; i--) {
+    const quando = new Date(agora - i * 60 * 1000);
+    const ang = 20 + (29 - i) * 5;
+    const r = demoLeitura(quando, ang);
+    r._anguloDemo = ang;
+    p.leituras.push(r);
+  }
+}
+
+function proximaDemo(p) {
+  const ultima = p.leituras[p.leituras.length - 1];
+  const quando = new Date();
+  // Continua de onde parou. Se as leituras anteriores vieram da API de verdade
+  // (queda de conexão no meio), retoma do último ângulo real calculado.
+  const anterior = ultima
+    ? (isFinite(ultima._anguloDemo) ? ultima._anguloDemo : (isFinite(ultima.angulo) ? ultima.angulo : 0))
+    : 0;
+  const base = anterior + (quando - (ultima ? ultima.timestamp : quando)) * DEMO.grausPorMs;
+  const r = demoLeitura(quando, base);
+  r._anguloDemo = base;
+  return r;
+}
+
+// ── Ciclo ─────────────────────────────────────────────────────
+function guardar(leitura) {
+  const p = balde(leitura.device);
+  const anterior = p.leituras[p.leituras.length - 1];
+  if (anterior && anterior.timestamp.getTime() === leitura.timestamp.getTime()) return;
+  p.leituras.push(leitura);
+  // Buffer generoso: o ajuste de círculo fica melhor quanto mais arco tiver.
+  if (p.leituras.length > 500) p.leituras = p.leituras.slice(-500);
+}
+
+function redesenhar() {
+  const p = balde(ativo);
+  if (!p.leituras.length) return;
+  try { calibrar(p); } catch (err) { console.error('Erro na calibração:', err); }
+  try { atualizarAngulos(p); } catch (err) { console.error('Erro nos ângulos:', err); }
+  try { updateCards(p); } catch (err) { console.error('Erro nos cards:', err); }
+  try { desenharDial(p); } catch (err) { console.error('Erro na vista de topo:', err); }
+  try { updateChart(p); } catch (err) { console.error('Erro no gráfico:', err); }
+  try { updateMap(p); } catch (err) { console.error('Erro no mapa:', err); }
+  renderSeletor();
+}
+
+async function fetchFromApi() {
+  const res = await fetch(CONFIG.API_URL);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const data = await res.json();
+  return Array.isArray(data) ? data.map(normalizeReading) : [normalizeReading(data)];
+}
+
+async function poll() {
+  if (CONFIG.API_URL) {
+    try {
+      (await fetchFromApi()).forEach(guardar);
+      setStatus('live');
+    } catch (err) {
+      console.error('Falha ao buscar dados da API:', err);
+      setStatus('offline');
+      guardar(proximaDemo(balde(DEVICE_PADRAO)));
+    }
+  } else {
+    setStatus('demo');
+    guardar(proximaDemo(balde(DEVICE_PADRAO)));
+  }
+  redesenhar();
+}
+
+async function init() {
+  try { initChart(); } catch (err) { console.error('Erro ao iniciar gráfico:', err); }
+  try { marcarModo(); } catch (err) { console.error('Erro no alternador:', err); }
+  try { renderAuthArea(); } catch (err) { console.error('Erro ao montar área de conta:', err); }
+
+  if (CONFIG.API_URL) {
+    try {
+      (await fetchFromApi()).forEach(guardar);
+      setStatus('live');
+    } catch (err) {
+      console.error('Falha ao buscar dados iniciais:', err);
+      setStatus('offline');
+    }
+  }
+
+  if (!balde(DEVICE_PADRAO).leituras.length) {
+    semearDemo(balde(DEVICE_PADRAO));
+    if (!CONFIG.API_URL) setStatus('demo');
+  }
+
+  redesenhar();
+  pollFoto();
+
+  setInterval(poll, CONFIG.POLL_INTERVAL_MS);
+  setInterval(pollFoto, CONFIG.FOTO_POLL_INTERVAL_MS);
+  setInterval(() => {
+    document.getElementById('clock').textContent = formatTime(new Date());
+    const p = balde(ativo);
+    const ultima = p.leituras[p.leituras.length - 1];
+    if (ultima) {
+      const quando = `atualizado ${timeAgo(ultima.timestamp)}`;
+      const tempMeta = document.getElementById('tempMeta');
+      if (typeof ultima.temperatura === 'number' && !isNaN(ultima.temperatura)) tempMeta.textContent = quando;
+      if (p.calib) document.getElementById('anguloMeta').textContent = quando;
+    }
+    updateFotoMeta();
+  }, 1000);
+}
+
+init();
+</script>
+</body>
+</html>
