@@ -542,12 +542,12 @@ if (!localStorage.getItem('pivo_user')) {
 
 // ── Configuração ──────────────────────────────────────────────
 const CONFIG = {
-  // Backend Flask na VM Oracle (rota que devolve a última leitura).
-  API_URL: 'http://167.126.23.215:5000/leitura/ultima',
+  // Ana: backend agora tem domínio + HTTPS (antes era IP:porta em HTTP puro).
+  API_URL: 'https://pivo-de-irrigacao.duckdns.org/leitura/ultima',
   // Teste: 5000-10000 (5-10s). Produção: 600000-900000 (10-15min) — diretriz do Omar.
   POLL_INTERVAL_MS: 10000,
   // Rota que devolve a última foto (JPEG cru) tirada pelo ESP32-CAM. null = esconde o card.
-  FOTO_URL: 'http://167.126.23.215:5000/foto/ultima',
+  FOTO_URL: 'https://pivo-de-irrigacao.duckdns.org/foto/ultima',
   FOTO_POLL_INTERVAL_MS: 15000,
 
   // ── Geometria do pivô ───────────────────────────────────────
@@ -1233,6 +1233,24 @@ function setStatus(mode) {
   }
 }
 
+// ── Autorização (Ana) ─────────────────────────────────────────
+// As rotas GET do backend agora exigem login: mandamos o mesmo access_token
+// do Google que o index.html recebeu, num header Authorization. Se o backend
+// disser 401/403 (token expirado, ou conta sem permissão), volta pro login.
+function tokenSalvo() {
+  try {
+    const usuario = JSON.parse(localStorage.getItem('pivo_user') || 'null');
+    return usuario && usuario.token;
+  } catch (err) {
+    return null;
+  }
+}
+
+function cabecalhoAuth() {
+  const token = tokenSalvo();
+  return token ? { Authorization: 'Bearer ' + token } : {};
+}
+
 // ── Área de conta ────────────────────────────────────────────
 function sair() {
   localStorage.removeItem('pivo_user');
@@ -1283,21 +1301,28 @@ function pollFoto() {
   if (!CONFIG.FOTO_URL) return;
   const img = document.getElementById('fotoImg');
   const empty = document.getElementById('fotoEmpty');
-  // Carrega numa Image() separada antes de trocar o <img> visível — assim, se a
-  // rota ainda não tiver foto (404) ou o backend estiver fora, mantém a última
-  // foto boa na tela em vez de piscar/quebrar.
-  const proxy = new Image();
-  proxy.onload = () => {
-    img.src = proxy.src;
-    img.style.display = 'block';
-    empty.style.display = 'none';
-    fotoAtualizadaEm = new Date();
-    updateFotoMeta();
-  };
-  proxy.onerror = () => {
-    if (!fotoAtualizadaEm) empty.textContent = 'nenhuma foto ainda — câmera não enviou nada pro backend';
-  };
-  proxy.src = CONFIG.FOTO_URL + '?t=' + Date.now();
+  // Ana: trocado de <img src=...> pra fetch(), porque uma tag <img> não
+  // consegue mandar o header Authorization — e a rota agora exige login.
+  fetch(CONFIG.FOTO_URL + '?t=' + Date.now(), { headers: cabecalhoAuth() })
+    .then(res => {
+      if (res.status === 401 || res.status === 403) { sair(); throw new Error('sessão inválida'); }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.blob();
+    })
+    .then(blob => {
+      const urlAntiga = img.dataset.blobUrl;
+      const url = URL.createObjectURL(blob);
+      img.src = url;
+      img.dataset.blobUrl = url;
+      img.style.display = 'block';
+      empty.style.display = 'none';
+      fotoAtualizadaEm = new Date();
+      updateFotoMeta();
+      if (urlAntiga) URL.revokeObjectURL(urlAntiga); // libera a foto anterior da memória
+    })
+    .catch(() => {
+      if (!fotoAtualizadaEm) empty.textContent = 'nenhuma foto ainda — câmera não enviou nada pro backend';
+    });
 }
 
 // ── Demonstração ──────────────────────────────────────────────
@@ -1371,7 +1396,8 @@ function redesenhar() {
 }
 
 async function fetchFromApi() {
-  const res = await fetch(CONFIG.API_URL);
+  const res = await fetch(CONFIG.API_URL, { headers: cabecalhoAuth() });
+  if (res.status === 401 || res.status === 403) { sair(); throw new Error('sessão inválida'); }
   if (!res.ok) throw new Error('HTTP ' + res.status);
   const data = await res.json();
   return Array.isArray(data) ? data.map(normalizeReading) : [normalizeReading(data)];
