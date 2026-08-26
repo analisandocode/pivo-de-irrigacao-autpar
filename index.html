@@ -281,23 +281,6 @@
     background: var(--border);
   }
 
-  .dev-link {
-    display: block;
-    width: 100%;
-    background: var(--panel-2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--muted);
-    font-family: var(--mono);
-    font-size: 12px;
-    padding: 10px 12px;
-    cursor: pointer;
-    transition: border-color 150ms ease, color 150ms ease;
-  }
-
-  .dev-link:hover { border-color: #384049; color: var(--paper); }
-  .dev-link:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
-
   .banner {
     display: none;
     font-size: 12.5px;
@@ -378,11 +361,6 @@
         </svg>
         <span id="googleBtnLabel">Fazer login com o Google</span>
     </button>
-      
-
-      <div class="divider">ou</div>
-
-      <button class="dev-link" id="devBtn" type="button">entrar sem conta · modo dev</button>
     </section>
 
   </div>
@@ -399,12 +377,17 @@
 const CONFIG = {
   GOOGLE_CLIENT_ID: '820768517126-imk67jtgqdd5hrbum6v5au9q2mk611vs.apps.googleusercontent.com',
   DESTINO: 'dashboard.html',
-  // Deixe true durante o desenvolvimento; troque para false antes de entregar.
-  PERMITIR_MODO_DEV: true,
 };
 
+// Único ponto de controle de quem pode acessar o painel — o Google só confirma
+// QUEM a pessoa é, não SE ela pode entrar. Essa checagem é quem decide isso.
+const EMAILS_PERMITIDOS = [
+  'analiviaalonso3@gmail.com',
+  'brunopereir10h7@gmail.com',
+];
+
 // Se já tem sessão salva, nem mostra a tela de login.
-if (localStorage.getItem('pivo_user') || localStorage.getItem('pivo_dev_bypass')) {
+if (localStorage.getItem('pivo_user')) {
   window.location.replace(CONFIG.DESTINO);
 }
 
@@ -412,7 +395,6 @@ const btn = document.getElementById('googleBtn');
 const btnLabel = document.getElementById('googleBtnLabel');
 const btnIcon = btn.querySelector('svg');
 const banner = document.getElementById('banner');
-const devBtn = document.getElementById('devBtn');
 
 let tokenClient = null;
 
@@ -468,6 +450,13 @@ function iniciarClienteGoogle() {
         });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const perfil = await r.json();
+
+        if (!EMAILS_PERMITIDOS.includes(perfil.email)) {
+          carregando(false);
+          mostrarBanner('Essa conta (<code>' + perfil.email + '</code>) não tem acesso a este painel.', 'erro');
+          return;
+        }
+
         entrar({
           nome: perfil.name || perfil.email,
           email: perfil.email,
@@ -497,7 +486,6 @@ function iniciarClienteGoogle() {
 
 function entrar(usuario) {
   localStorage.setItem('pivo_user', JSON.stringify(usuario));
-  localStorage.removeItem('pivo_dev_bypass');
   btnLabel.textContent = 'entrando…';
   window.location.replace(CONFIG.DESTINO);
 }
@@ -522,19 +510,6 @@ btn.addEventListener('click', () => {
   carregando(true);
   tokenClient.requestAccessToken({ prompt: 'select_account' });
 });
-
-// ── Modo dev ──────────────────────────────────────────────────
-// Atalho para testar o painel sem OAuth configurado. O dashboard já entende
-// esta chave e mostra o selo "modo dev · sem login" no cabeçalho.
-if (CONFIG.PERMITIR_MODO_DEV) {
-  devBtn.addEventListener('click', () => {
-    localStorage.setItem('pivo_dev_bypass', '1');
-    window.location.replace(CONFIG.DESTINO);
-  });
-} else {
-  devBtn.remove();
-  document.querySelector('.divider').remove();
-}
 </script>
 </body>
 </html>

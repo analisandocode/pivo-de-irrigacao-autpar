@@ -424,16 +424,6 @@
     white-space: nowrap;
   }
 
-  .dev-chip {
-    font-size: 11px;
-    font-family: var(--mono);
-    color: var(--amber);
-    background: var(--panel-2);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 5px 12px;
-  }
-
   .logout-btn {
     background: none;
     border: none;
@@ -546,7 +536,7 @@
 // real só existe quando o backend passar a validar sessão/token — decisão
 // pendente registrada no SEGURANCA.md. Por enquanto isso é só um "portão"
 // de UX: manda quem não passou pelo login (index.html) de volta pra lá.
-if (!localStorage.getItem('pivo_user') && !localStorage.getItem('pivo_dev_bypass')) {
+if (!localStorage.getItem('pivo_user')) {
   window.location.href = 'index.html';
 }
 
@@ -1246,7 +1236,6 @@ function setStatus(mode) {
 // ── Área de conta ────────────────────────────────────────────
 function sair() {
   localStorage.removeItem('pivo_user');
-  localStorage.removeItem('pivo_dev_bypass');
   window.location.href = 'index.html';
 }
 
@@ -1278,20 +1267,6 @@ function renderAuthArea() {
     chip.appendChild(sairBtn);
 
     area.appendChild(chip);
-    return;
-  }
-
-  if (localStorage.getItem('pivo_dev_bypass')) {
-    const dev = document.createElement('span');
-    dev.className = 'dev-chip';
-    dev.textContent = 'modo dev · sem login';
-    area.appendChild(dev);
-
-    const sairBtn = document.createElement('button');
-    sairBtn.className = 'logout-btn';
-    sairBtn.textContent = 'sair';
-    sairBtn.onclick = sair;
-    area.appendChild(sairBtn);
   }
 }
 
