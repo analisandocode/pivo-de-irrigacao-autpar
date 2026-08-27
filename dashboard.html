@@ -3,6 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>
+  // Ana: trava de acesso ANTES de a página desenhar. Fica aqui no topo do
+  // <head> de propósito — se ficasse lá no fim do body (onde estava), o
+  // dashboard aparecia por 1-2s antes de redirecionar (o "flash"). Aqui a
+  // checagem roda antes de pintar qualquer pixel. replace() em vez de href
+  // pra não deixar o dashboard no histórico (botão voltar não volta pra cá).
+  if (!localStorage.getItem('pivo_user')) {
+    window.location.replace('index.html');
+  }
+</script>
 <title>Monitor de campo — ESP32</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
