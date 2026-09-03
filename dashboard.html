@@ -365,6 +365,47 @@
     padding: 0 20px;
   }
 
+  .galeria-toggle {
+    background: none;
+    border: none;
+    color: var(--amber);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    cursor: pointer;
+    padding: 0;
+  }
+  .galeria-toggle:hover { text-decoration: underline; }
+
+  .galeria-grade {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+    gap: 6px;
+    margin-top: 12px;
+  }
+  .galeria-item {
+    aspect-ratio: 1;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    overflow: hidden;
+    cursor: pointer;
+    padding: 0;
+  }
+  .galeria-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .galeria-vazia { color: var(--faint); font-size: 12px; font-family: var(--mono); margin-top: 12px; }
+
+  .lightbox {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+    display: none; align-items: center; justify-content: center;
+    z-index: 50; cursor: zoom-out; padding: 24px;
+  }
+  .lightbox.show { display: flex; }
+  .lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px; }
+  .lightbox .legenda {
+    position: absolute; bottom: 24px; left: 0; right: 0; text-align: center;
+    color: var(--faint); font-family: var(--mono); font-size: 12px;
+  }
+
   table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
 
   th {
@@ -522,12 +563,14 @@
 
   <div class="grid-2">
     <div class="card">
-      <p class="panel-title">Última foto da câmera</p>
+      <p class="panel-title">Última foto da câmera<span class="aside"><button type="button" class="galeria-toggle" id="galeriaToggle">ver mais fotos</button></span></p>
       <div class="photo-wrap">
         <img id="fotoImg" alt="Última foto capturada pelo ESP32-CAM do pivô">
         <div class="photo-empty" id="fotoEmpty">aguardando primeira foto</div>
       </div>
       <div class="meta-line" id="fotoMeta">aguardando primeira foto</div>
+      <div class="galeria-grade" id="galeriaGrade" hidden></div>
+      <div class="galeria-vazia" id="galeriaVazia" hidden>nenhuma foto anterior ainda</div>
     </div>
     <div class="card">
       <p class="panel-title">Últimas leituras</p>
@@ -538,6 +581,11 @@
     </div>
   </div>
 
+</div>
+
+<div class="lightbox" id="lightbox">
+  <img id="lightboxImg" alt="Foto ampliada do histórico da câmera">
+  <div class="legenda" id="lightboxLegenda"></div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -563,6 +611,9 @@ const CONFIG = {
   // Rota que devolve a última foto (JPEG cru) tirada pelo ESP32-CAM. null = esconde o card.
   FOTO_URL: 'https://pivo-de-irrigacao.duckdns.org/foto/ultima',
   FOTO_POLL_INTERVAL_MS: 15000,
+  // Histórico de fotos (galeria) — lista + busca individual de cada uma.
+  FOTO_LISTA_URL: 'https://pivo-de-irrigacao.duckdns.org/foto/lista',
+  FOTO_VER_URL: 'https://pivo-de-irrigacao.duckdns.org/foto/ver',
 
   // ── Geometria do pivô ───────────────────────────────────────
   // O ponto de pivô NUNCA se move: se você for até ele uma vez e anotar a
@@ -1352,6 +1403,108 @@ function pollFoto() {
       if (!fotoAtualizadaEm) empty.textContent = 'nenhuma foto ainda — câmera não enviou nada pro backend';
     });
 }
+
+// ── Galeria de fotos (histórico) ─────────────────────────────
+// Carrega sob demanda (só quando o usuário clica) — a maioria das visitas
+// só quer ver a foto mais recente, então não vale gastar requisição/banda
+// toda hora com um histórico que muda pouco (poucas fotos por dia).
+const galeriaBlobUrls = [];
+
+function limparGaleria() {
+  galeriaBlobUrls.forEach(u => URL.revokeObjectURL(u));
+  galeriaBlobUrls.length = 0;
+  document.getElementById('galeriaGrade').innerHTML = '';
+}
+
+function legendaDaFoto(nome) {
+  // nome = "foto/<device>/<AAAAMMDDTHHMMSSZ>.jpg"
+  const m = nome.match(/(\d{8})T(\d{6})Z\.jpg$/);
+  if (!m) return nome;
+  const [, ymd, hms] = m;
+  const d = new Date(Date.UTC(
+    +ymd.slice(0, 4), +ymd.slice(4, 6) - 1, +ymd.slice(6, 8),
+    +hms.slice(0, 2), +hms.slice(2, 4), +hms.slice(4, 6),
+  ));
+  return `${d.toLocaleDateString('pt-BR')} ${formatTime(d)}`;
+}
+
+function abrirLightbox(blobUrl, legenda) {
+  document.getElementById('lightboxImg').src = blobUrl;
+  document.getElementById('lightboxLegenda').textContent = legenda;
+  document.getElementById('lightbox').classList.add('show');
+}
+
+document.getElementById('lightbox').addEventListener('click', () => {
+  document.getElementById('lightbox').classList.remove('show');
+});
+
+async function carregarGaleria() {
+  const grade = document.getElementById('galeriaGrade');
+  const vazia = document.getElementById('galeriaVazia');
+  vazia.hidden = true;
+  grade.hidden = false;
+  grade.textContent = 'carregando…';
+
+  try {
+    const res = await fetch(CONFIG.FOTO_LISTA_URL, { headers: cabecalhoAuth() });
+    if (res.status === 401 || res.status === 403) { sair(); return; }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const { fotos } = await res.json();
+
+    limparGaleria();
+    grade.textContent = '';
+
+    if (!fotos.length) {
+      grade.hidden = true;
+      vazia.hidden = false;
+      return;
+    }
+
+    for (const foto of fotos) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'galeria-item';
+      grade.appendChild(btn);
+
+      // Cada thumbnail busca a própria imagem (não dá pra usar <img src=...>
+      // direto porque a rota exige o header Authorization).
+      fetch(`${CONFIG.FOTO_VER_URL}?nome=${encodeURIComponent(foto.nome)}`, { headers: cabecalhoAuth() })
+        .then(r => r.ok ? r.blob() : Promise.reject())
+        .then(blob => {
+          const url = URL.createObjectURL(blob);
+          galeriaBlobUrls.push(url);
+          const img = document.createElement('img');
+          img.src = url;
+          img.alt = 'Foto do pivô — ' + legendaDaFoto(foto.nome);
+          btn.appendChild(img);
+          btn.addEventListener('click', () => abrirLightbox(url, legendaDaFoto(foto.nome)));
+        })
+        .catch(() => btn.remove());
+    }
+  } catch (err) {
+    console.error('falha ao carregar galeria:', err);
+    grade.textContent = '';
+    vazia.textContent = 'não foi possível carregar o histórico agora';
+    grade.hidden = true;
+    vazia.hidden = false;
+  }
+}
+
+document.getElementById('galeriaToggle').addEventListener('click', () => {
+  const grade = document.getElementById('galeriaGrade');
+  const vazia = document.getElementById('galeriaVazia');
+  const abrindo = grade.hidden && vazia.hidden;
+  const btn = document.getElementById('galeriaToggle');
+  if (abrindo) {
+    btn.textContent = 'esconder fotos';
+    carregarGaleria();
+  } else {
+    btn.textContent = 'ver mais fotos';
+    grade.hidden = true;
+    vazia.hidden = true;
+    limparGaleria();
+  }
+});
 
 // ── Demonstração ──────────────────────────────────────────────
 // Pivô sintético: centro fixo, raio 320 m, girando. A velocidade é exagerada
