@@ -475,6 +475,9 @@
         <span class="trend" id="tempTrend"></span>
       </div>
       <div class="meta-line" id="tempMeta">aguardando primeira leitura</div>
+      <div class="stats" style="margin-top:12px">
+        <div class="stat"><span class="k">Umidade</span><span class="v" id="statUmidade">--</span></div>
+      </div>
       <div class="chart-wrap" style="height:150px;margin-top:18px"><canvas id="tempChart"></canvas></div>
     </div>
 
@@ -492,6 +495,7 @@
         <div class="stat"><span class="k">Volta completa</span><span class="v" id="statVolta">--</span></div>
         <div class="stat"><span class="k">Raio</span><span class="v" id="statRaio">--</span></div>
         <div class="stat"><span class="k">Área do círculo</span><span class="v" id="statArea">--</span></div>
+        <div class="stat"><span class="k">Altitude</span><span class="v" id="statAltitude">--</span></div>
       </div>
 
       <div class="progress-row"><span id="setorRotulo">Posição desde a referência</span><b id="statVarrido">--</b></div>
@@ -705,10 +709,14 @@ function normalizeReading(raw) {
   // 'temperatura' nem 'device_id'. Tratamos todos os casos aqui.
   const quando = raw.criado_em ?? raw.timestamp;
   const temp = raw.temperatura;
+  const umid = raw.umidade;
+  const alt = raw.altitude;
   return {
     device: String(raw.device_id ?? raw.dispositivo ?? DEVICE_PADRAO),
     timestamp: quando ? new Date(quando) : new Date(),
     temperatura: (temp === undefined || temp === null) ? null : Number(temp),
+    umidade: (umid === undefined || umid === null) ? null : Number(umid),
+    altitude: (alt === undefined || alt === null) ? null : Number(alt),
     latitude: Number(raw.latitude),
     longitude: Number(raw.longitude),
   };
@@ -1098,6 +1106,16 @@ function updateCards(p) {
     trendEl.textContent = '';
   }
 
+  // Umidade (mesmo sensor BME280 da temperatura)
+  const umidEl = document.getElementById('statUmidade');
+  const umidValor = typeof latest.umidade === 'number' && !isNaN(latest.umidade);
+  umidEl.textContent = umidValor ? `${latest.umidade.toFixed(1)}%` : '--';
+
+  // Altitude (vem do GPS, junto com lat/lon)
+  const altEl = document.getElementById('statAltitude');
+  const altValor = typeof latest.altitude === 'number' && !isNaN(latest.altitude);
+  altEl.textContent = altValor ? `${latest.altitude.toFixed(0)}m` : '--';
+
   // Ângulo
   const angEl = document.getElementById('anguloValue');
   const sentidoEl = document.getElementById('sentidoTrend');
@@ -1352,6 +1370,8 @@ function demoLeitura(quando, anguloBase) {
     device: DEVICE_PADRAO,
     timestamp: quando,
     temperatura: Math.round((24 + Math.sin(quando.getTime() / 6e5) * 2 + Math.random() * 0.4) * 10) / 10,
+    umidade: Math.round((55 + Math.cos(quando.getTime() / 6e5) * 8 + Math.random() * 1.5) * 10) / 10,
+    altitude: Math.round(540 + Math.random() * 2),
     latitude: pos.latitude,
     longitude: pos.longitude,
   };
