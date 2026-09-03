@@ -377,14 +377,15 @@
 const CONFIG = {
   GOOGLE_CLIENT_ID: '820768517126-imk67jtgqdd5hrbum6v5au9q2mk611vs.apps.googleusercontent.com',
   DESTINO: 'dashboard.html',
+  // Mesma rota protegida que o dashboard usa — serve aqui só pra confirmar,
+  // logo no login, se a conta tem acesso (ver app.py: EMAILS_PERMITIDOS).
+  API_URL: 'https://pivo-de-irrigacao.duckdns.org/leitura/ultima',
 };
 
-// Único ponto de controle de quem pode acessar o painel — o Google só confirma
-// QUEM a pessoa é, não SE ela pode entrar. Essa checagem é quem decide isso.
-const EMAILS_PERMITIDOS = [
-  'analiviaalonso3@gmail.com',
-  'brunopereira10h7@gmail.com',
-];
+// Quem pode entrar é decidido SÓ pelo backend (app.py: EMAILS_PERMITIDOS) — não
+// existe mais uma segunda lista aqui. Antes tinha uma cópia dessa lista neste
+// arquivo também; se alguém mudasse só a do backend, a pessoa continuava
+// bloqueada aqui na tela de login sem razão.
 
 // Se já tem sessão salva, nem mostra a tela de login.
 if (localStorage.getItem('pivo_user')) {
@@ -451,23 +452,29 @@ function iniciarClienteGoogle() {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const perfil = await r.json();
 
-        if (!EMAILS_PERMITIDOS.includes(perfil.email)) {
+        // Confirma no backend (única fonte de verdade) se essa conta tem acesso.
+        const check = await fetch(CONFIG.API_URL, {
+          headers: { Authorization: 'Bearer ' + resposta.access_token },
+        });
+        if (check.status === 401 || check.status === 403) {
           carregando(false);
           mostrarBanner('Essa conta (<code>' + perfil.email + '</code>) não tem acesso a este painel.', 'erro');
           return;
         }
+        if (!check.ok) throw new Error('HTTP ' + check.status);
 
         entrar({
           nome: perfil.name || perfil.email,
           email: perfil.email,
           foto: perfil.picture,
-          // Guardado para quando o Flask passar a validar a sessão (ver SEGURANCA.md).
+          // Mandado nas chamadas do dashboard no header Authorization — o backend
+          // valida de novo a cada requisição (ver app.py: exigir_login_google).
           token: resposta.access_token,
         });
       } catch (err) {
-        console.error('Falha ao ler o perfil do Google:', err);
+        console.error('Falha ao confirmar login:', err);
         carregando(false);
-        mostrarBanner('Entramos no Google, mas não deu para ler o perfil. Tente de novo.', 'erro');
+        mostrarBanner('Entramos no Google, mas não deu para confirmar seu acesso. Tente de novo.', 'erro');
       }
     },
     error_callback: (err) => {
