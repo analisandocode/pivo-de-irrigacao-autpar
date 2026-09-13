@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>
+  // Mesma trava do dashboard.html — só admin entra aqui.
+  const sessao = localStorage.getItem('pivo_user');
+  if (!sessao) {
+    window.location.replace('index.html');
+  } else if (JSON.parse(sessao).role !== 'admin') {
+    window.location.replace('fotos.html');
+  }
+</script>
+<title>Dispositivos — Monitor de campo ESP32</title>
+<style>
+  :root {
+    --graphite: #14181C;
+    --panel: #1B2127;
+    --panel-2: #20272E;
+    --border: #2A323A;
+    --paper: #ECEAE2;
+    --muted: #9CA3AA;
+    --faint: #6B7280;
+    --amber: #FFB020;
+    --teal: #3FB8AF;
+    --red: #E5484D;
+    --mono: 'JetBrains Mono', 'SF Mono', 'Roboto Mono', ui-monospace, 'Cascadia Code', monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background-color: var(--graphite);
+    background-image:
+      linear-gradient(rgba(236,234,226,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(236,234,226,0.025) 1px, transparent 1px);
+    background-size: 28px 28px;
+    color: var(--paper);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .signal-bar { height: 3px; background: linear-gradient(90deg, var(--amber), var(--teal)); }
+
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 20px 64px; }
+
+  header.top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; margin-bottom: 22px; flex-wrap: wrap;
+  }
+
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand .eyebrow { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
+  .brand h1 { font-size: 19px; font-weight: 600; margin: 0; letter-spacing: 0.01em; }
+  .brand a { color: var(--teal); font-size: 12.5px; text-decoration: none; }
+  .brand a:hover { text-decoration: underline; }
+
+  .user-chip { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+  .user-chip img { width: 26px; height: 26px; border-radius: 50%; }
+  .logout-btn {
+    background: none; border: none; color: var(--faint); font-family: var(--sans);
+    font-size: 12px; cursor: pointer; padding: 4px 6px;
+  }
+  .logout-btn:hover { color: var(--red); }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px; margin-bottom: 18px;
+  }
+  .panel-title { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); margin: 0 0 6px; }
+  .panel-sub { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; line-height: 1.6; }
+
+  .form-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .form-row input {
+    flex: 1; min-width: 160px; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--paper); font-family: var(--sans); font-size: 13px;
+    padding: 9px 11px;
+  }
+  .form-row input:focus { outline: 2px solid var(--amber); outline-offset: 1px; }
+  .form-row button {
+    background: var(--teal); border: none; border-radius: 6px; color: #0B1013;
+    font-family: var(--sans); font-weight: 600; font-size: 13px; padding: 9px 18px; cursor: pointer;
+  }
+  .form-row button:hover { filter: brightness(1.08); }
+  .form-row button:disabled { opacity: 0.5; cursor: default; }
+
+  .hint { font-family: var(--mono); font-size: 11px; color: var(--faint); margin: 0 0 4px; }
+
+  .banner {
+    font-size: 12.5px; line-height: 1.6; padding: 10px 13px; border-radius: 8px;
+    margin-bottom: 14px; border: 1px solid var(--border); border-left: 2px solid var(--border);
+    color: var(--muted); background: var(--panel-2); display: none;
+  }
+  .banner.show { display: block; }
+  .banner.erro { border-left-color: var(--red); }
+  .banner.ok { border-left-color: var(--teal); }
+  .banner code { font-family: var(--mono); color: var(--amber); font-size: 11.5px; word-break: break-all; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--border); }
+  th { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); font-weight: 500; }
+  td.mono { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .chave-cell { display: flex; align-items: center; gap: 8px; }
+  .chave-cell button {
+    background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--faint);
+    font-size: 10.5px; padding: 2px 7px; cursor: pointer; font-family: var(--mono);
+  }
+  .chave-cell button:hover { color: var(--teal); border-color: var(--teal); }
+  .vazio { color: var(--faint); font-size: 12.5px; padding: 8px 0; }
+
+  @media (max-width: 480px) {
+    header.top { flex-direction: column; align-items: flex-start; }
+  }
+</style>
+</head>
+<body>
+
+<div class="signal-bar"></div>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <span class="eyebrow">ESP32</span>
+      <h1>Dispositivos</h1>
+      <a href="dashboard.html">← voltar pro painel</a>
+    </div>
+    <div id="authArea"></div>
+  </header>
+
+  <section class="panel">
+    <p class="panel-title">Cadastrar novo dispositivo</p>
+    <p class="panel-sub">
+      Cada ESP32-CAM ganha uma chave própria e única — o device_id vem
+      desse cadastro, o firmware não precisa (nem consegue) se declarar
+      com outro nome. Nome de convenção sugerido:
+      <code>cliente-local-NN</code> (ex: <code>estufa-tomate-01</code>).
+      Ver <code>NOMEACAO.md</code> na raiz do repo.
+    </p>
+    <p id="cadastroErro" class="banner erro"></p>
+    <p id="cadastroOk" class="banner ok"></p>
+    <div class="form-row">
+      <input type="text" id="inputDeviceId" placeholder="device_id (ex: estufa-tomate-02)" autocomplete="off">
+      <input type="text" id="inputCliente" placeholder="cliente / responsável (ex: Grupo Estufa TCC)" autocomplete="off">
+      <button type="button" id="btnCadastrar">cadastrar</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <p class="panel-title">Dispositivos cadastrados</p>
+    <p class="panel-sub">A chave (api_key) vai no <code>config.h</code> do ESP32-CAM daquele dispositivo.</p>
+    <div id="tabelaArea"><p class="vazio">carregando…</p></div>
+  </section>
+</div>
+
+<script>
+const CONFIG = {
+  DISPOSITIVOS_URL: 'https://pivo-de-irrigacao.duckdns.org/admin/dispositivos',
+};
+
+function tokenSalvo() {
+  try {
+    const usuario = JSON.parse(localStorage.getItem('pivo_user') || 'null');
+    return usuario && usuario.token;
+  } catch (err) {
+    return null;
+  }
+}
+
+function cabecalhoAuth(extra) {
+  const token = tokenSalvo();
+  return Object.assign({}, extra, token ? { Authorization: 'Bearer ' + token } : {});
+}
+
+function sair() {
+  localStorage.removeItem('pivo_user');
+  window.location.href = 'index.html';
+}
+
+function renderAuthArea() {
+  const area = document.getElementById('authArea');
+  area.innerHTML = '';
+  const salvo = localStorage.getItem('pivo_user');
+  if (!salvo) return;
+
+  let usuario;
+  try { usuario = JSON.parse(salvo); } catch (err) { sair(); return; }
+
+  const chip = document.createElement('div');
+  chip.className = 'user-chip';
+
+  const img = document.createElement('img');
+  img.src = usuario.foto;
+  img.alt = '';
+  chip.appendChild(img);
+
+  const nome = document.createElement('span');
+  nome.textContent = usuario.nome;
+  chip.appendChild(nome);
+
+  const sairBtn = document.createElement('button');
+  sairBtn.className = 'logout-btn';
+  sairBtn.textContent = 'sair';
+  sairBtn.onclick = sair;
+  chip.appendChild(sairBtn);
+
+  area.appendChild(chip);
+}
+
+function mostrarErro(msg) {
+  const el = document.getElementById('cadastroErro');
+  document.getElementById('cadastroOk').classList.remove('show');
+  el.textContent = msg;
+  el.classList.add('show');
+}
+
+function mostrarOk(msg) {
+  const el = document.getElementById('cadastroOk');
+  document.getElementById('cadastroErro').classList.remove('show');
+  el.innerHTML = msg;
+  el.classList.add('show');
+}
+
+async function carregarTabela() {
+  const area = document.getElementById('tabelaArea');
+  try {
+    const res = await fetch(CONFIG.DISPOSITIVOS_URL, { headers: cabecalhoAuth() });
+    if (res.status === 401 || res.status === 403) { sair(); return; }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const { dispositivos } = await res.json();
+
+    if (!dispositivos.length) {
+      area.innerHTML = '<p class="vazio">nenhum dispositivo cadastrado ainda</p>';
+      return;
+    }
+
+    // Agrupa por cliente — cada cliente pode ter vários devices (vários
+    // pivôs), e o botão "copiar" monta a lista pronta (com ";") pra colar
+    // direto no device_ids do emails_permitidos.txt, sem digitar na mão.
+    const grupos = new Map();
+    for (const d of dispositivos) {
+      const chave = d.cliente || '(sem cliente)';
+      if (!grupos.has(chave)) grupos.set(chave, []);
+      grupos.get(chave).push(d);
+    }
+
+    area.innerHTML = '';
+    for (const [cliente, devices] of grupos) {
+      const bloco = document.createElement('div');
+      bloco.style.marginBottom = '18px';
+
+      const cabecalho = document.createElement('div');
+      cabecalho.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;';
+
+      const titulo = document.createElement('strong');
+      titulo.style.fontSize = '13.5px';
+      titulo.textContent = cliente;
+      cabecalho.appendChild(titulo);
+
+      const copiarBtn = document.createElement('button');
+      copiarBtn.type = 'button';
+      copiarBtn.className = 'btn-revelar';
+      copiarBtn.textContent = `copiar device_ids (${devices.length})`;
+      copiarBtn.addEventListener('click', async () => {
+        const lista = devices.map(d => d.device_id).join(';');
+        await navigator.clipboard.writeText(lista);
+        copiarBtn.textContent = 'copiado!';
+        setTimeout(() => { copiarBtn.textContent = `copiar device_ids (${devices.length})`; }, 1500);
+      });
+      cabecalho.appendChild(copiarBtn);
+
+      bloco.appendChild(cabecalho);
+
+      const table = document.createElement('table');
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr><th>device_id</th><th>api_key</th></tr>';
+      table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+
+      for (const d of devices) {
+        const tr = document.createElement('tr');
+
+        const tdId = document.createElement('td');
+        tdId.textContent = d.device_id;
+        tr.appendChild(tdId);
+
+        const tdChave = document.createElement('td');
+        tdChave.className = 'mono';
+        const cell = document.createElement('span');
+        cell.className = 'chave-cell';
+        const span = document.createElement('span');
+        span.className = 'chave-txt';
+        span.dataset.chave = d.api_key;
+        span.textContent = '••••••••' + d.api_key.slice(-6);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn-revelar';
+        btn.textContent = 'mostrar';
+        btn.addEventListener('click', () => {
+          const revelado = span.textContent === span.dataset.chave;
+          span.textContent = revelado ? '••••••••' + span.dataset.chave.slice(-6) : span.dataset.chave;
+          btn.textContent = revelado ? 'mostrar' : 'esconder';
+        });
+        cell.appendChild(span);
+        cell.appendChild(btn);
+        tdChave.appendChild(cell);
+        tr.appendChild(tdChave);
+
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      bloco.appendChild(table);
+      area.appendChild(bloco);
+    }
+  } catch (err) {
+    console.error('falha ao carregar dispositivos:', err);
+    area.innerHTML = '<p class="vazio">não foi possível carregar a lista agora</p>';
+  }
+}
+
+document.getElementById('btnCadastrar').addEventListener('click', async () => {
+  const deviceId = document.getElementById('inputDeviceId').value.trim();
+  const cliente = document.getElementById('inputCliente').value.trim();
+  const btn = document.getElementById('btnCadastrar');
+
+  if (!deviceId || !cliente) {
+    mostrarErro('Preenche o device_id e o cliente antes de cadastrar.');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'cadastrando…';
+  try {
+    const res = await fetch(CONFIG.DISPOSITIVOS_URL, {
+      method: 'POST',
+      headers: cabecalhoAuth({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ device_id: deviceId, cliente }),
+    });
+    const dados = await res.json();
+    if (res.status === 401 || res.status === 403) { sair(); return; }
+    if (!res.ok) {
+      mostrarErro(dados.erro || 'Não foi possível cadastrar.');
+      return;
+    }
+
+    mostrarOk(
+      `Cadastrado! Chave pro <code>config.h</code> do <code>${dados.device_id}</code> ` +
+      `(copie agora, ela some da tela ao recarregar):<br><code>${dados.api_key}</code>`
+    );
+    document.getElementById('inputDeviceId').value = '';
+    document.getElementById('inputCliente').value = '';
+    carregarTabela();
+  } catch (err) {
+    mostrarErro('Falha de conexão. Tente de novo.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'cadastrar';
+  }
+});
+
+renderAuthArea();
+carregarTabela();
+</script>
+</body>
+</html>
