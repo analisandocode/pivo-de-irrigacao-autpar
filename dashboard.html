@@ -12,10 +12,11 @@
   const sessao = localStorage.getItem('pivo_user');
   if (!sessao) {
     window.location.replace('index.html');
-  } else if (JSON.parse(sessao).role !== 'admin') {
-    // logado, mas não é admin — não é pra ver o pivô, só a foto dele.
-    window.location.replace('fotos.html');
   }
+  // Admin e usuario caem os dois aqui agora — o seletor de pivô já
+  // filtra sozinho pra cada papel (ver /meus-pivos e /meus-dispositivos
+  // no app.py). Só o link pra dispositivos.html (cadastro) some pra
+  // quem não é admin, mais abaixo.
 </script>
 <title>Monitor de campo — ESP32</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
@@ -501,7 +502,7 @@
       <span class="eyebrow">ESP32</span>
       <h1>Monitor de campo</h1>
       <select class="pivo-select" id="pivoSelect" aria-label="Escolher pivô"></select>
-      <a href="dispositivos.html" style="color:var(--teal);font-size:12.5px;text-decoration:none;">dispositivos</a>
+      <a href="dispositivos.html" id="linkDispositivos" style="color:var(--teal);font-size:12.5px;text-decoration:none;" hidden>dispositivos</a>
     </div>
     <div class="top-right">
       <span class="clock" id="clock">--:--:--</span>
@@ -620,11 +621,11 @@ const CONFIG = {
   // Histórico de fotos (galeria) — lista + busca individual de cada uma.
   FOTO_LISTA_URL: 'https://pivo-de-irrigacao.duckdns.org/foto/lista',
   FOTO_VER_URL: 'https://pivo-de-irrigacao.duckdns.org/foto/ver',
-  // Pivôs e dispositivos cadastrados (mesmas rotas do dispositivos.html) —
-  // usadas aqui só pra descobrir quais pivôs existem de verdade e quais
-  // dispositivos (câmera/telemetria) tem dentro de cada um.
-  PIVOS_URL: 'https://pivo-de-irrigacao.duckdns.org/admin/pivos',
-  DISPOSITIVOS_URL: 'https://pivo-de-irrigacao.duckdns.org/admin/dispositivos',
+  // Rotas neutras (não exigem admin, diferente das de dispositivos.html) —
+  // cada papel só vê os pivôs/dispositivos que tem acesso: admin vê tudo,
+  // usuario só os pivo_ids dele no emails_permitidos.txt.
+  PIVOS_URL: 'https://pivo-de-irrigacao.duckdns.org/meus-pivos',
+  DISPOSITIVOS_URL: 'https://pivo-de-irrigacao.duckdns.org/meus-dispositivos',
 
   // ── Geometria do pivô ───────────────────────────────────────
   // O ponto de pivô NUNCA se move: se você for até ele uma vez e anotar a
@@ -1400,6 +1401,9 @@ function renderAuthArea() {
   if (salvo) {
     let usuario;
     try { usuario = JSON.parse(salvo); } catch (err) { sair(); return; }
+
+    // Cadastrar/apagar pivô e dispositivo é só admin — usuario nem vê o link.
+    document.getElementById('linkDispositivos').hidden = usuario.role !== 'admin';
 
     const chip = document.createElement('div');
     chip.className = 'user-chip';

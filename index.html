@@ -377,8 +377,12 @@
 const CONFIG = {
   GOOGLE_CLIENT_ID: '820768517126-imk67jtgqdd5hrbum6v5au9q2mk611vs.apps.googleusercontent.com',
   // Pra onde mandar cada papel depois do login (ver app.py: GET /me).
+  // Os dois caem no mesmo dashboard agora — ele mesmo filtra o que cada
+  // papel vê (admin tudo, usuario só os pivôs dele) via /meus-pivos e
+  // /meus-dispositivos. fotos.html fica só como página órfã (era
+  // específica do TCC da estufa, será removida quando ele terminar).
   DESTINO_ADMIN: 'dashboard.html',
-  DESTINO_USUARIO: 'fotos.html',
+  DESTINO_USUARIO: 'dashboard.html',
   // Rota neutra (não exige admin) — confirma login e diz o papel de quem
   // entrou. Backend decide tudo (app.py: emails_permitidos.txt), não existe
   // segunda lista aqui.
