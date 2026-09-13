@@ -376,20 +376,23 @@
 // aberto direto do disco (file://) NÃO funciona: o Google recusa a origem.
 const CONFIG = {
   GOOGLE_CLIENT_ID: '820768517126-imk67jtgqdd5hrbum6v5au9q2mk611vs.apps.googleusercontent.com',
-  DESTINO: 'dashboard.html',
-  // Mesma rota protegida que o dashboard usa — serve aqui só pra confirmar,
-  // logo no login, se a conta tem acesso (ver app.py: EMAILS_PERMITIDOS).
-  API_URL: 'https://pivo-de-irrigacao.duckdns.org/leitura/ultima',
+  // Pra onde mandar cada papel depois do login (ver app.py: GET /me).
+  DESTINO_ADMIN: 'dashboard.html',
+  DESTINO_USUARIO: 'fotos.html',
+  // Rota neutra (não exige admin) — confirma login e diz o papel de quem
+  // entrou. Backend decide tudo (app.py: emails_permitidos.txt), não existe
+  // segunda lista aqui.
+  ME_URL: 'https://pivo-de-irrigacao.duckdns.org/me',
 };
 
-// Quem pode entrar é decidido SÓ pelo backend (app.py: EMAILS_PERMITIDOS) — não
-// existe mais uma segunda lista aqui. Antes tinha uma cópia dessa lista neste
-// arquivo também; se alguém mudasse só a do backend, a pessoa continuava
-// bloqueada aqui na tela de login sem razão.
+function destinoPara(role) {
+  return role === 'admin' ? CONFIG.DESTINO_ADMIN : CONFIG.DESTINO_USUARIO;
+}
 
 // Se já tem sessão salva, nem mostra a tela de login.
-if (localStorage.getItem('pivo_user')) {
-  window.location.replace(CONFIG.DESTINO);
+const sessaoSalva = localStorage.getItem('pivo_user');
+if (sessaoSalva) {
+  window.location.replace(destinoPara(JSON.parse(sessaoSalva).role));
 }
 
 const btn = document.getElementById('googleBtn');
@@ -452,8 +455,9 @@ function iniciarClienteGoogle() {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const perfil = await r.json();
 
-        // Confirma no backend (única fonte de verdade) se essa conta tem acesso.
-        const check = await fetch(CONFIG.API_URL, {
+        // Confirma no backend (única fonte de verdade) se essa conta tem acesso
+        // e qual o papel dela — decide pra onde mandar cada um.
+        const check = await fetch(CONFIG.ME_URL, {
           headers: { Authorization: 'Bearer ' + resposta.access_token },
         });
         if (check.status === 401 || check.status === 403) {
@@ -462,11 +466,14 @@ function iniciarClienteGoogle() {
           return;
         }
         if (!check.ok) throw new Error('HTTP ' + check.status);
+        const perfilAcesso = await check.json();
 
         entrar({
           nome: perfil.name || perfil.email,
           email: perfil.email,
           foto: perfil.picture,
+          role: perfilAcesso.role,
+          device_ids: perfilAcesso.device_ids,
           // Mandado nas chamadas do dashboard no header Authorization — o backend
           // valida de novo a cada requisição (ver app.py: exigir_login_google).
           token: resposta.access_token,
@@ -494,7 +501,7 @@ function iniciarClienteGoogle() {
 function entrar(usuario) {
   localStorage.setItem('pivo_user', JSON.stringify(usuario));
   btnLabel.textContent = 'entrando…';
-  window.location.replace(CONFIG.DESTINO);
+  window.location.replace(destinoPara(usuario.role));
 }
 
 btn.addEventListener('click', () => {

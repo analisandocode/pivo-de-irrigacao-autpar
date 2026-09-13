@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>
+  // Mesma trava do dashboard.html: confere ANTES de desenhar, pra não
+  // piscar conteúdo antes de redirecionar quem não está logado.
+  if (!localStorage.getItem('pivo_user')) {
+    window.location.replace('index.html');
+  }
+</script>
+<title>Minhas fotos — ESP32</title>
+<style>
+  :root {
+    --graphite: #14181C;
+    --panel: #1B2127;
+    --panel-2: #20272E;
+    --border: #2A323A;
+    --paper: #ECEAE2;
+    --muted: #9CA3AA;
+    --faint: #6B7280;
+    --amber: #FFB020;
+    --teal: #3FB8AF;
+    --red: #E5484D;
+    --mono: 'JetBrains Mono', 'SF Mono', 'Roboto Mono', ui-monospace, 'Cascadia Code', monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background-color: var(--graphite);
+    background-image:
+      linear-gradient(rgba(236,234,226,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(236,234,226,0.025) 1px, transparent 1px);
+    background-size: 28px 28px;
+    color: var(--paper);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .signal-bar { height: 3px; background: linear-gradient(90deg, var(--amber), var(--teal)); }
+
+  .wrap { max-width: 780px; margin: 0 auto; padding: 24px 20px 64px; }
+
+  header.top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; margin-bottom: 22px; flex-wrap: wrap;
+  }
+
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand .eyebrow { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
+  .brand h1 { font-size: 19px; font-weight: 600; margin: 0; letter-spacing: 0.01em; }
+
+  .user-chip { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+  .user-chip img { width: 26px; height: 26px; border-radius: 50%; }
+  .logout-btn {
+    background: none; border: none; color: var(--faint); font-family: var(--sans);
+    font-size: 12px; cursor: pointer; padding: 4px 6px;
+  }
+  .logout-btn:hover { color: var(--red); }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px; margin-bottom: 18px;
+  }
+  .panel-title {
+    font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint);
+    margin: 0 0 14px; display: flex; align-items: baseline; justify-content: space-between;
+  }
+
+  .panel-sub { font-size: 12.5px; color: var(--muted); margin: 0; line-height: 1.6; }
+
+  .fotos-atuais-grade {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px;
+  }
+  .foto-atual-card { min-width: 0; }
+  .foto-atual-card .label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em; color: var(--teal);
+    margin: 0 0 6px; text-transform: uppercase;
+  }
+  .foto-atual { width: 100%; border-radius: 8px; display: none; background: var(--panel-2); }
+  .foto-empty {
+    font-family: var(--mono); font-size: 13px; color: var(--faint);
+    padding: 48px 0; text-align: center;
+  }
+  .foto-meta { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 6px; }
+
+  .galeria-grade {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 8px;
+  }
+  .galeria-item {
+    aspect-ratio: 1; border-radius: 6px; overflow: hidden; border: 1px solid var(--border);
+    background: var(--panel-2); padding: 0; cursor: pointer;
+  }
+  .galeria-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .galeria-vazia { color: var(--faint); font-size: 12px; font-family: var(--mono); }
+
+  .lightbox {
+    display: none; position: fixed; inset: 0; background: rgba(10,12,14,0.92);
+    align-items: center; justify-content: center; flex-direction: column; gap: 12px;
+    padding: 24px; cursor: zoom-out; z-index: 10;
+  }
+  .lightbox.show { display: flex; }
+  .lightbox img { max-width: 100%; max-height: 80vh; border-radius: 8px; }
+  .lightbox .legenda { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+  @media (max-width: 480px) {
+    header.top { flex-direction: column; align-items: flex-start; }
+  }
+</style>
+</head>
+<body>
+
+<div class="signal-bar"></div>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <span class="eyebrow">ESP32</span>
+      <h1>Minhas fotos</h1>
+    </div>
+    <div id="authArea"></div>
+  </header>
+
+  <section class="panel">
+    <p class="panel-title">Foto mais recente</p>
+    <p class="panel-sub" id="semDevice" hidden>Sua conta não está associada a nenhum pivô ainda.</p>
+    <div id="fotosAtuaisGrade"></div>
+  </section>
+
+  <section class="panel">
+    <p class="panel-title">Histórico</p>
+    <div class="galeria-grade" id="galeriaGrade"></div>
+    <p class="galeria-vazia" id="galeriaVazia" hidden>nenhuma foto anterior ainda</p>
+  </section>
+</div>
+
+<div class="lightbox" id="lightbox">
+  <img id="lightboxImg" alt="">
+  <span class="legenda" id="lightboxLegenda"></span>
+</div>
+
+<script>
+// ── Configuração ──────────────────────────────────────────────
+// Mesmo backend do dashboard — as rotas de foto já filtram sozinhas pelo
+// papel de quem logou (ver app.py: /foto/ultima e /foto/lista).
+const CONFIG = {
+  FOTO_URL: 'https://pivo-de-irrigacao.duckdns.org/foto/ultima',
+  FOTO_LISTA_URL: 'https://pivo-de-irrigacao.duckdns.org/foto/lista',
+  FOTO_VER_URL: 'https://pivo-de-irrigacao.duckdns.org/foto/ver',
+  FOTO_POLL_INTERVAL_MS: 15000,
+};
+
+function tokenSalvo() {
+  try {
+    const usuario = JSON.parse(localStorage.getItem('pivo_user') || 'null');
+    return usuario && usuario.token;
+  } catch (err) {
+    return null;
+  }
+}
+
+function cabecalhoAuth() {
+  const token = tokenSalvo();
+  return token ? { Authorization: 'Bearer ' + token } : {};
+}
+
+function sair() {
+  localStorage.removeItem('pivo_user');
+  window.location.href = 'index.html';
+}
+
+function renderAuthArea() {
+  const area = document.getElementById('authArea');
+  area.innerHTML = '';
+  const salvo = localStorage.getItem('pivo_user');
+  if (!salvo) return;
+
+  let usuario;
+  try { usuario = JSON.parse(salvo); } catch (err) { sair(); return; }
+
+  const chip = document.createElement('div');
+  chip.className = 'user-chip';
+
+  const img = document.createElement('img');
+  img.src = usuario.foto;
+  img.alt = '';
+  chip.appendChild(img);
+
+  const nome = document.createElement('span');
+  nome.textContent = usuario.nome;
+  chip.appendChild(nome);
+
+  const sairBtn = document.createElement('button');
+  sairBtn.className = 'logout-btn';
+  sairBtn.textContent = 'sair';
+  sairBtn.onclick = sair;
+  chip.appendChild(sairBtn);
+
+  area.appendChild(chip);
+}
+
+function timeAgo(date) {
+  const s = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (s < 5) return 'agora mesmo';
+  if (s < 60) return `há ${s}s`;
+  return `há ${Math.floor(s / 60)}min`;
+}
+
+// ── Foto atual ────────────────────────────────────────────────
+// Um card por pivô da conta — se o usuário tiver mais de um device_id,
+// cada um mostra a própria foto mais recente (senão, com vários pivôs,
+// só apareceria o do primeiro da lista e os outros ficariam escondidos).
+function meusDeviceIds() {
+  try {
+    const usuario = JSON.parse(localStorage.getItem('pivo_user') || 'null');
+    return (usuario && usuario.device_ids) || [];
+  } catch (err) {
+    return [];
+  }
+}
+
+const atualizadoEm = {};
+
+function montarCardsAtuais() {
+  const grade = document.getElementById('fotosAtuaisGrade');
+  const semDevice = document.getElementById('semDevice');
+  const devices = meusDeviceIds();
+
+  if (!devices.length) {
+    semDevice.hidden = false;
+    grade.innerHTML = '';
+    return;
+  }
+  semDevice.hidden = true;
+  grade.className = 'fotos-atuais-grade';
+  grade.innerHTML = devices.map(id => `
+    <div class="foto-atual-card" data-device="${id}">
+      <p class="label">${id}</p>
+      <img class="foto-atual" id="fotoImg-${id}" alt="Última foto — ${id}">
+      <p class="foto-empty" id="fotoEmpty-${id}">carregando…</p>
+      <p class="foto-meta" id="fotoMeta-${id}"></p>
+    </div>
+  `).join('');
+}
+
+function updateFotoMeta(deviceId) {
+  const meta = document.getElementById('fotoMeta-' + deviceId);
+  if (!meta) return;
+  meta.textContent = atualizadoEm[deviceId] ? `atualizado ${timeAgo(atualizadoEm[deviceId])}` : '';
+}
+
+function pollFoto(deviceId) {
+  const img = document.getElementById('fotoImg-' + deviceId);
+  const empty = document.getElementById('fotoEmpty-' + deviceId);
+  if (!img || !empty) return;
+  fetch(`${CONFIG.FOTO_URL}?device_id=${encodeURIComponent(deviceId)}&t=${Date.now()}`, { headers: cabecalhoAuth() })
+    .then(res => {
+      if (res.status === 401 || res.status === 403) { sair(); throw new Error('sessão inválida'); }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.blob();
+    })
+    .then(blob => {
+      const urlAntiga = img.dataset.blobUrl;
+      const url = URL.createObjectURL(blob);
+      img.src = url;
+      img.dataset.blobUrl = url;
+      img.style.display = 'block';
+      empty.style.display = 'none';
+      atualizadoEm[deviceId] = new Date();
+      updateFotoMeta(deviceId);
+      if (urlAntiga) URL.revokeObjectURL(urlAntiga);
+    })
+    .catch(() => {
+      if (!atualizadoEm[deviceId]) empty.textContent = 'nenhuma foto ainda — a câmera não enviou nada pro backend';
+    });
+}
+
+function pollTodasAsFotos() {
+  meusDeviceIds().forEach(pollFoto);
+}
+
+// ── Histórico ─────────────────────────────────────────────────
+const galeriaBlobUrls = [];
+
+function legendaDaFoto(nome) {
+  // nome = "foto/<device>/<AAAAMMDDTHHMMSSZ>.jpg"
+  const m = nome.match(/(\d{8})T(\d{6})Z\.jpg$/);
+  if (!m) return nome;
+  const [, ymd, hms] = m;
+  const d = new Date(Date.UTC(
+    +ymd.slice(0, 4), +ymd.slice(4, 6) - 1, +ymd.slice(6, 8),
+    +hms.slice(0, 2), +hms.slice(2, 4), +hms.slice(4, 6),
+  ));
+  return `${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR', { hour12: false })}`;
+}
+
+function abrirLightbox(blobUrl, legenda) {
+  document.getElementById('lightboxImg').src = blobUrl;
+  document.getElementById('lightboxLegenda').textContent = legenda;
+  document.getElementById('lightbox').classList.add('show');
+}
+
+document.getElementById('lightbox').addEventListener('click', () => {
+  document.getElementById('lightbox').classList.remove('show');
+});
+
+async function carregarGaleria() {
+  const grade = document.getElementById('galeriaGrade');
+  const vazia = document.getElementById('galeriaVazia');
+
+  try {
+    const res = await fetch(CONFIG.FOTO_LISTA_URL, { headers: cabecalhoAuth() });
+    if (res.status === 401 || res.status === 403) { sair(); return; }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const { fotos } = await res.json();
+
+    galeriaBlobUrls.forEach(u => URL.revokeObjectURL(u));
+    galeriaBlobUrls.length = 0;
+    grade.innerHTML = '';
+
+    if (!fotos.length) {
+      vazia.hidden = false;
+      return;
+    }
+    vazia.hidden = true;
+
+    for (const foto of fotos) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'galeria-item';
+      grade.appendChild(btn);
+
+      fetch(`${CONFIG.FOTO_VER_URL}?nome=${encodeURIComponent(foto.nome)}`, { headers: cabecalhoAuth() })
+        .then(r => r.ok ? r.blob() : Promise.reject())
+        .then(blob => {
+          const url = URL.createObjectURL(blob);
+          galeriaBlobUrls.push(url);
+          const img = document.createElement('img');
+          img.src = url;
+          img.alt = 'Foto — ' + legendaDaFoto(foto.nome);
+          btn.appendChild(img);
+          btn.addEventListener('click', () => abrirLightbox(url, legendaDaFoto(foto.nome)));
+        })
+        .catch(() => btn.remove());
+    }
+  } catch (err) {
+    console.error('falha ao carregar historico:', err);
+    vazia.textContent = 'não foi possível carregar o histórico agora';
+    vazia.hidden = false;
+  }
+}
+
+renderAuthArea();
+montarCardsAtuais();
+pollTodasAsFotos();
+carregarGaleria();
+setInterval(pollTodasAsFotos, CONFIG.FOTO_POLL_INTERVAL_MS);
+setInterval(() => meusDeviceIds().forEach(updateFotoMeta), 5000);
+</script>
+</body>
+</html>
