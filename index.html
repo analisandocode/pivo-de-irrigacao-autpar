@@ -377,12 +377,13 @@
 const CONFIG = {
   GOOGLE_CLIENT_ID: '820768517126-imk67jtgqdd5hrbum6v5au9q2mk611vs.apps.googleusercontent.com',
   // Pra onde mandar cada papel depois do login (ver app.py: GET /me).
-  // usuario/aluno continua em fotos.html por enquanto (o dashboard.html
-  // completo pra usuario existe no backend — /meus-pivos,
-  // /meus-dispositivos — mas voltou a ficar reservado só pro admin no
-  // front até decidir reativar).
+  // admin e usuario caem os dois no dashboard.html (ele filtra sozinho:
+  // admin vê tudo, usuario só os pivôs dele, via /meus-pivos e
+  // /meus-dispositivos). "aluno" é o papel temporário do TCC da estufa —
+  // só ele fica em fotos.html, some quando o TCC acabar.
   DESTINO_ADMIN: 'dashboard.html',
-  DESTINO_USUARIO: 'fotos.html',
+  DESTINO_USUARIO: 'dashboard.html',
+  DESTINO_ALUNO: 'fotos.html',
   // Rota neutra (não exige admin) — confirma login e diz o papel de quem
   // entrou. Backend decide tudo (app.py: emails_permitidos.txt), não existe
   // segunda lista aqui.
@@ -390,7 +391,9 @@ const CONFIG = {
 };
 
 function destinoPara(role) {
-  return role === 'admin' ? CONFIG.DESTINO_ADMIN : CONFIG.DESTINO_USUARIO;
+  if (role === 'admin') return CONFIG.DESTINO_ADMIN;
+  if (role === 'usuario') return CONFIG.DESTINO_USUARIO;
+  return CONFIG.DESTINO_ALUNO; // aluno, ou qualquer papel novo/desconhecido — o mais restrito por padrão
 }
 
 // Se já tem sessão salva, nem mostra a tela de login.

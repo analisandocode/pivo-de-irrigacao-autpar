@@ -12,9 +12,12 @@
   const sessao = localStorage.getItem('pivo_user');
   if (!sessao) {
     window.location.replace('index.html');
-  } else if (JSON.parse(sessao).role !== 'admin') {
-    // logado, mas não é admin — usuario/aluno usa o fotos.html por enquanto.
-    window.location.replace('fotos.html');
+  } else {
+    const papel = JSON.parse(sessao).role;
+    if (papel !== 'admin' && papel !== 'usuario') {
+      // aluno (papel temporário do TCC da estufa) usa o fotos.html.
+      window.location.replace('fotos.html');
+    }
   }
 </script>
 <title>Monitor de campo — ESP32</title>
