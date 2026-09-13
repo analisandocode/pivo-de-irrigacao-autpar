@@ -286,6 +286,29 @@ async function preencherSelectPivos() {
   }
 }
 
+async function apagarPivo(pivoId, quantosDispositivos) {
+  const aviso = quantosDispositivos
+    ? `Apagar o pivô "${pivoId}" e os ${quantosDispositivos} dispositivo(s) dentro dele? As chaves deles param de funcionar na hora. Isso não pode ser desfeito.`
+    : `Apagar o pivô "${pivoId}"? Isso não pode ser desfeito.`;
+  if (!confirm(aviso)) return;
+  try {
+    const res = await fetch(`${CONFIG.PIVOS_URL}/${encodeURIComponent(pivoId)}`, {
+      method: 'DELETE',
+      headers: cabecalhoAuth(),
+    });
+    if (res.status === 401 || res.status === 403) { sair(); return; }
+    if (!res.ok) {
+      const dados = await res.json().catch(() => ({}));
+      alert(dados.erro || 'Não foi possível apagar.');
+      return;
+    }
+    preencherSelectPivos();
+    carregarTabela();
+  } catch (err) {
+    alert('Falha de conexão. Tente de novo.');
+  }
+}
+
 async function apagarDispositivo(deviceId) {
   if (!confirm(`Apagar o dispositivo "${deviceId}"? A chave dele para de funcionar na hora. Isso não pode ser desfeito.`)) {
     return;
@@ -366,6 +389,12 @@ async function carregarTabela() {
         const pivoHeader = document.createElement('div');
         pivoHeader.className = 'pivo-header';
         pivoHeader.innerHTML = `<strong>${pivo.pivo_id}</strong>`;
+        const btnApagarPivo = document.createElement('button');
+        btnApagarPivo.type = 'button';
+        btnApagarPivo.className = 'btn-revelar btn-apagar';
+        btnApagarPivo.textContent = 'apagar pivô';
+        btnApagarPivo.addEventListener('click', () => apagarPivo(pivo.pivo_id, devices.length));
+        pivoHeader.appendChild(btnApagarPivo);
         pivoBloco.appendChild(pivoHeader);
 
         if (!devices.length) {
