@@ -110,6 +110,19 @@
   }
   .chave-cell button:hover { color: var(--teal); border-color: var(--teal); }
   .vazio { color: var(--faint); font-size: 12.5px; padding: 8px 0; }
+  .btn-apagar { color: var(--faint) !important; }
+  .btn-apagar:hover { color: var(--red) !important; border-color: var(--red) !important; }
+  .form-row select {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--paper); font-family: var(--sans); font-size: 13px; padding: 9px 11px;
+  }
+  .pivo-bloco { margin-bottom: 22px; }
+  .pivo-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 6px; gap: 10px; flex-wrap: wrap;
+  }
+  .pivo-header strong { font-size: 13.5px; }
+  .pivo-header .pivo-cliente { color: var(--faint); font-size: 12px; font-weight: 400; margin-left: 6px; }
 
   @media (max-width: 480px) {
     header.top { flex-direction: column; align-items: flex-start; }
@@ -131,9 +144,26 @@
   </header>
 
   <section class="panel">
+    <p class="panel-title">Cadastrar novo pivô</p>
+    <p class="panel-sub">
+      Um pivô (ou uma estufa) é o nível do meio entre cliente e
+      dispositivo — pode ter vários dispositivos dentro (câmera +
+      telemetria, por exemplo). Cadastra o pivô primeiro, os
+      dispositivos vão dentro dele.
+    </p>
+    <p id="pivoErro" class="banner erro"></p>
+    <p id="pivoOk" class="banner ok"></p>
+    <div class="form-row">
+      <input type="text" id="inputPivoId" placeholder="pivo_id (ex: pivo-fazenda-02)" autocomplete="off">
+      <input type="text" id="inputPivoCliente" placeholder="cliente / responsável (ex: Grupo Estufa TCC)" autocomplete="off">
+      <button type="button" id="btnCadastrarPivo">cadastrar pivô</button>
+    </div>
+  </section>
+
+  <section class="panel">
     <p class="panel-title">Cadastrar novo dispositivo</p>
     <p class="panel-sub">
-      Cada ESP32-CAM ganha uma chave própria e única — o device_id vem
+      Cada ESP32 ganha uma chave própria e única — o device_id vem
       desse cadastro, o firmware não precisa (nem consegue) se declarar
       com outro nome. Nome de convenção sugerido:
       <code>cliente-local-NN</code> (ex: <code>estufa-tomate-01</code>).
@@ -142,21 +172,28 @@
     <p id="cadastroErro" class="banner erro"></p>
     <p id="cadastroOk" class="banner ok"></p>
     <div class="form-row">
+      <select id="selectPivo"><option value="">carregando pivôs…</option></select>
       <input type="text" id="inputDeviceId" placeholder="device_id (ex: estufa-tomate-02)" autocomplete="off">
-      <input type="text" id="inputCliente" placeholder="cliente / responsável (ex: Grupo Estufa TCC)" autocomplete="off">
       <button type="button" id="btnCadastrar">cadastrar</button>
     </div>
   </section>
 
   <section class="panel">
-    <p class="panel-title">Dispositivos cadastrados</p>
-    <p class="panel-sub">A chave (api_key) vai no <code>config.h</code> do ESP32-CAM daquele dispositivo.</p>
+    <p class="panel-title">Pivôs e dispositivos cadastrados</p>
+    <p class="panel-sub">
+      A chave (api_key) vai no <code>config.h</code> do ESP32 daquele
+      dispositivo. O botão "copiar pivo_ids" monta a lista pronta (com
+      ";") pra colar direto no <code>emails_permitidos.txt</code> —
+      dá acesso ao(s) pivô(s) inteiro(s) daquele cliente, todos os
+      dispositivos dentro incluídos.
+    </p>
     <div id="tabelaArea"><p class="vazio">carregando…</p></div>
   </section>
 </div>
 
 <script>
 const CONFIG = {
+  PIVOS_URL: 'https://pivo-de-irrigacao.duckdns.org/admin/pivos',
   DISPOSITIVOS_URL: 'https://pivo-de-irrigacao.duckdns.org/admin/dispositivos',
 };
 
@@ -209,110 +246,188 @@ function renderAuthArea() {
   area.appendChild(chip);
 }
 
-function mostrarErro(msg) {
-  const el = document.getElementById('cadastroErro');
-  document.getElementById('cadastroOk').classList.remove('show');
+function mostrarErro(campoId, msg) {
+  const el = document.getElementById(campoId);
   el.textContent = msg;
   el.classList.add('show');
 }
 
-function mostrarOk(msg) {
-  const el = document.getElementById('cadastroOk');
-  document.getElementById('cadastroErro').classList.remove('show');
+function mostrarOk(campoId, msg) {
+  const el = document.getElementById(campoId);
   el.innerHTML = msg;
   el.classList.add('show');
+}
+
+function limparBanners(...ids) {
+  ids.forEach(id => document.getElementById(id).classList.remove('show'));
+}
+
+async function carregarPivos() {
+  const res = await fetch(CONFIG.PIVOS_URL, { headers: cabecalhoAuth() });
+  if (res.status === 401 || res.status === 403) { sair(); return []; }
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const { pivos } = await res.json();
+  return pivos;
+}
+
+async function preencherSelectPivos() {
+  const select = document.getElementById('selectPivo');
+  try {
+    const pivos = await carregarPivos();
+    if (!pivos.length) {
+      select.innerHTML = '<option value="">cadastre um pivô primeiro ↑</option>';
+      return;
+    }
+    select.innerHTML = pivos
+      .map(p => `<option value="${p.pivo_id}">${p.pivo_id} (${p.cliente})</option>`)
+      .join('');
+  } catch (err) {
+    select.innerHTML = '<option value="">falha ao carregar pivôs</option>';
+  }
+}
+
+async function apagarDispositivo(deviceId) {
+  if (!confirm(`Apagar o dispositivo "${deviceId}"? A chave dele para de funcionar na hora. Isso não pode ser desfeito.`)) {
+    return;
+  }
+  try {
+    const res = await fetch(`${CONFIG.DISPOSITIVOS_URL}/${encodeURIComponent(deviceId)}`, {
+      method: 'DELETE',
+      headers: cabecalhoAuth(),
+    });
+    if (res.status === 401 || res.status === 403) { sair(); return; }
+    if (!res.ok) {
+      const dados = await res.json().catch(() => ({}));
+      alert(dados.erro || 'Não foi possível apagar.');
+      return;
+    }
+    carregarTabela();
+  } catch (err) {
+    alert('Falha de conexão. Tente de novo.');
+  }
 }
 
 async function carregarTabela() {
   const area = document.getElementById('tabelaArea');
   try {
-    const res = await fetch(CONFIG.DISPOSITIVOS_URL, { headers: cabecalhoAuth() });
-    if (res.status === 401 || res.status === 403) { sair(); return; }
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const { dispositivos } = await res.json();
+    const [pivos, disRes] = await Promise.all([
+      carregarPivos(),
+      fetch(CONFIG.DISPOSITIVOS_URL, { headers: cabecalhoAuth() }),
+    ]);
+    if (disRes.status === 401 || disRes.status === 403) { sair(); return; }
+    if (!disRes.ok) throw new Error('HTTP ' + disRes.status);
+    const { dispositivos } = await disRes.json();
 
-    if (!dispositivos.length) {
-      area.innerHTML = '<p class="vazio">nenhum dispositivo cadastrado ainda</p>';
+    if (!pivos.length) {
+      area.innerHTML = '<p class="vazio">nenhum pivô cadastrado ainda</p>';
       return;
     }
 
-    // Agrupa por cliente — cada cliente pode ter vários devices (vários
-    // pivôs), e o botão "copiar" monta a lista pronta (com ";") pra colar
-    // direto no device_ids do emails_permitidos.txt, sem digitar na mão.
-    const grupos = new Map();
+    // Dois níveis de agrupamento: cliente (dono do "copiar pivo_ids", pode
+    // ter vários pivôs) > pivô (dono dos dispositivos de dentro dele).
+    const clientes = new Map();
+    for (const p of pivos) {
+      if (!clientes.has(p.cliente)) clientes.set(p.cliente, []);
+      clientes.get(p.cliente).push(p);
+    }
+    const devicesPorPivo = new Map();
     for (const d of dispositivos) {
-      const chave = d.cliente || '(sem cliente)';
-      if (!grupos.has(chave)) grupos.set(chave, []);
-      grupos.get(chave).push(d);
+      if (!devicesPorPivo.has(d.pivo_id)) devicesPorPivo.set(d.pivo_id, []);
+      devicesPorPivo.get(d.pivo_id).push(d);
     }
 
     area.innerHTML = '';
-    for (const [cliente, devices] of grupos) {
-      const bloco = document.createElement('div');
-      bloco.style.marginBottom = '18px';
+    for (const [cliente, pivosDoCliente] of clientes) {
+      const clienteBloco = document.createElement('div');
+      clienteBloco.style.marginBottom = '26px';
 
-      const cabecalho = document.createElement('div');
-      cabecalho.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;';
-
-      const titulo = document.createElement('strong');
-      titulo.style.fontSize = '13.5px';
-      titulo.textContent = cliente;
-      cabecalho.appendChild(titulo);
+      const clienteCabecalho = document.createElement('div');
+      clienteCabecalho.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;';
+      clienteCabecalho.innerHTML = `<strong style="font-size:14.5px;">${cliente}</strong>`;
 
       const copiarBtn = document.createElement('button');
       copiarBtn.type = 'button';
       copiarBtn.className = 'btn-revelar';
-      copiarBtn.textContent = `copiar device_ids (${devices.length})`;
+      const idsDoCliente = pivosDoCliente.map(p => p.pivo_id).join(';');
+      copiarBtn.textContent = `copiar pivo_ids (${pivosDoCliente.length})`;
       copiarBtn.addEventListener('click', async () => {
-        const lista = devices.map(d => d.device_id).join(';');
-        await navigator.clipboard.writeText(lista);
+        await navigator.clipboard.writeText(idsDoCliente);
         copiarBtn.textContent = 'copiado!';
-        setTimeout(() => { copiarBtn.textContent = `copiar device_ids (${devices.length})`; }, 1500);
+        setTimeout(() => { copiarBtn.textContent = `copiar pivo_ids (${pivosDoCliente.length})`; }, 1500);
       });
-      cabecalho.appendChild(copiarBtn);
+      clienteCabecalho.appendChild(copiarBtn);
+      clienteBloco.appendChild(clienteCabecalho);
 
-      bloco.appendChild(cabecalho);
+      for (const pivo of pivosDoCliente) {
+        const devices = devicesPorPivo.get(pivo.pivo_id) || [];
+        const pivoBloco = document.createElement('div');
+        pivoBloco.className = 'pivo-bloco';
 
-      const table = document.createElement('table');
-      const thead = document.createElement('thead');
-      thead.innerHTML = '<tr><th>device_id</th><th>api_key</th></tr>';
-      table.appendChild(thead);
-      const tbody = document.createElement('tbody');
+        const pivoHeader = document.createElement('div');
+        pivoHeader.className = 'pivo-header';
+        pivoHeader.innerHTML = `<strong>${pivo.pivo_id}</strong>`;
+        pivoBloco.appendChild(pivoHeader);
 
-      for (const d of devices) {
-        const tr = document.createElement('tr');
+        if (!devices.length) {
+          const vazio = document.createElement('p');
+          vazio.className = 'vazio';
+          vazio.textContent = 'nenhum dispositivo neste pivô ainda';
+          pivoBloco.appendChild(vazio);
+          clienteBloco.appendChild(pivoBloco);
+          continue;
+        }
 
-        const tdId = document.createElement('td');
-        tdId.textContent = d.device_id;
-        tr.appendChild(tdId);
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        thead.innerHTML = '<tr><th>device_id</th><th>api_key</th><th></th></tr>';
+        table.appendChild(thead);
+        const tbody = document.createElement('tbody');
 
-        const tdChave = document.createElement('td');
-        tdChave.className = 'mono';
-        const cell = document.createElement('span');
-        cell.className = 'chave-cell';
-        const span = document.createElement('span');
-        span.className = 'chave-txt';
-        span.dataset.chave = d.api_key;
-        span.textContent = '••••••••' + d.api_key.slice(-6);
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn-revelar';
-        btn.textContent = 'mostrar';
-        btn.addEventListener('click', () => {
-          const revelado = span.textContent === span.dataset.chave;
-          span.textContent = revelado ? '••••••••' + span.dataset.chave.slice(-6) : span.dataset.chave;
-          btn.textContent = revelado ? 'mostrar' : 'esconder';
-        });
-        cell.appendChild(span);
-        cell.appendChild(btn);
-        tdChave.appendChild(cell);
-        tr.appendChild(tdChave);
+        for (const d of devices) {
+          const tr = document.createElement('tr');
 
-        tbody.appendChild(tr);
+          const tdId = document.createElement('td');
+          tdId.textContent = d.device_id;
+          tr.appendChild(tdId);
+
+          const tdChave = document.createElement('td');
+          tdChave.className = 'mono';
+          const cell = document.createElement('span');
+          cell.className = 'chave-cell';
+          const span = document.createElement('span');
+          span.className = 'chave-txt';
+          span.dataset.chave = d.api_key;
+          span.textContent = '••••••••' + d.api_key.slice(-6);
+          const btnMostrar = document.createElement('button');
+          btnMostrar.type = 'button';
+          btnMostrar.className = 'btn-revelar';
+          btnMostrar.textContent = 'mostrar';
+          btnMostrar.addEventListener('click', () => {
+            const revelado = span.textContent === span.dataset.chave;
+            span.textContent = revelado ? '••••••••' + span.dataset.chave.slice(-6) : span.dataset.chave;
+            btnMostrar.textContent = revelado ? 'mostrar' : 'esconder';
+          });
+          cell.appendChild(span);
+          cell.appendChild(btnMostrar);
+          tdChave.appendChild(cell);
+          tr.appendChild(tdChave);
+
+          const tdAcao = document.createElement('td');
+          const btnApagar = document.createElement('button');
+          btnApagar.type = 'button';
+          btnApagar.className = 'btn-revelar btn-apagar';
+          btnApagar.textContent = 'apagar';
+          btnApagar.addEventListener('click', () => apagarDispositivo(d.device_id));
+          tdAcao.appendChild(btnApagar);
+          tr.appendChild(tdAcao);
+
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        pivoBloco.appendChild(table);
+        clienteBloco.appendChild(pivoBloco);
       }
-      table.appendChild(tbody);
-      bloco.appendChild(table);
-      area.appendChild(bloco);
+      area.appendChild(clienteBloco);
     }
   } catch (err) {
     console.error('falha ao carregar dispositivos:', err);
@@ -320,13 +435,53 @@ async function carregarTabela() {
   }
 }
 
+document.getElementById('btnCadastrarPivo').addEventListener('click', async () => {
+  const pivoId = document.getElementById('inputPivoId').value.trim();
+  const cliente = document.getElementById('inputPivoCliente').value.trim();
+  const btn = document.getElementById('btnCadastrarPivo');
+  limparBanners('pivoErro', 'pivoOk');
+
+  if (!pivoId || !cliente) {
+    mostrarErro('pivoErro', 'Preenche o pivo_id e o cliente antes de cadastrar.');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'cadastrando…';
+  try {
+    const res = await fetch(CONFIG.PIVOS_URL, {
+      method: 'POST',
+      headers: cabecalhoAuth({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ pivo_id: pivoId, cliente }),
+    });
+    const dados = await res.json();
+    if (res.status === 401 || res.status === 403) { sair(); return; }
+    if (!res.ok) {
+      mostrarErro('pivoErro', dados.erro || 'Não foi possível cadastrar.');
+      return;
+    }
+
+    mostrarOk('pivoOk', `Pivô <code>${dados.pivo_id}</code> cadastrado.`);
+    document.getElementById('inputPivoId').value = '';
+    document.getElementById('inputPivoCliente').value = '';
+    preencherSelectPivos();
+    carregarTabela();
+  } catch (err) {
+    mostrarErro('pivoErro', 'Falha de conexão. Tente de novo.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'cadastrar pivô';
+  }
+});
+
 document.getElementById('btnCadastrar').addEventListener('click', async () => {
   const deviceId = document.getElementById('inputDeviceId').value.trim();
-  const cliente = document.getElementById('inputCliente').value.trim();
+  const pivoId = document.getElementById('selectPivo').value;
   const btn = document.getElementById('btnCadastrar');
+  limparBanners('cadastroErro', 'cadastroOk');
 
-  if (!deviceId || !cliente) {
-    mostrarErro('Preenche o device_id e o cliente antes de cadastrar.');
+  if (!deviceId || !pivoId) {
+    mostrarErro('cadastroErro', 'Preenche o device_id e escolhe o pivô antes de cadastrar.');
     return;
   }
 
@@ -336,24 +491,24 @@ document.getElementById('btnCadastrar').addEventListener('click', async () => {
     const res = await fetch(CONFIG.DISPOSITIVOS_URL, {
       method: 'POST',
       headers: cabecalhoAuth({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ device_id: deviceId, cliente }),
+      body: JSON.stringify({ device_id: deviceId, pivo_id: pivoId }),
     });
     const dados = await res.json();
     if (res.status === 401 || res.status === 403) { sair(); return; }
     if (!res.ok) {
-      mostrarErro(dados.erro || 'Não foi possível cadastrar.');
+      mostrarErro('cadastroErro', dados.erro || 'Não foi possível cadastrar.');
       return;
     }
 
     mostrarOk(
+      'cadastroOk',
       `Cadastrado! Chave pro <code>config.h</code> do <code>${dados.device_id}</code> ` +
       `(copie agora, ela some da tela ao recarregar):<br><code>${dados.api_key}</code>`
     );
     document.getElementById('inputDeviceId').value = '';
-    document.getElementById('inputCliente').value = '';
     carregarTabela();
   } catch (err) {
-    mostrarErro('Falha de conexão. Tente de novo.');
+    mostrarErro('cadastroErro', 'Falha de conexão. Tente de novo.');
   } finally {
     btn.disabled = false;
     btn.textContent = 'cadastrar';
@@ -361,6 +516,7 @@ document.getElementById('btnCadastrar').addEventListener('click', async () => {
 });
 
 renderAuthArea();
+preencherSelectPivos();
 carregarTabela();
 </script>
 </body>
