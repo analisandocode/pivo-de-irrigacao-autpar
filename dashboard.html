@@ -9,8 +9,12 @@
   // dashboard aparecia por 1-2s antes de redirecionar (o "flash"). Aqui a
   // checagem roda antes de pintar qualquer pixel. replace() em vez de href
   // pra não deixar o dashboard no histórico (botão voltar não volta pra cá).
-  if (!localStorage.getItem('pivo_user')) {
+  const sessao = localStorage.getItem('pivo_user');
+  if (!sessao) {
     window.location.replace('index.html');
+  } else if (JSON.parse(sessao).role !== 'admin') {
+    // logado, mas não é admin — não é pra ver o pivô, só a foto dele.
+    window.location.replace('fotos.html');
   }
 </script>
 <title>Monitor de campo — ESP32</title>
@@ -605,16 +609,22 @@ if (!localStorage.getItem('pivo_user')) {
 
 // ── Configuração ──────────────────────────────────────────────
 const CONFIG = {
-  // Ana: backend agora tem domínio + HTTPS (antes era IP:porta em HTTP puro).
+  // Local pra testar contra o backend rodando em codigo-backend/app.py.
+  // Trocar de volta pro domínio da VM antes de commitar/entregar.
   API_URL: 'https://pivo-de-irrigacao.duckdns.org/leitura/ultima',
   // Teste: 5000-10000 (5-10s). Produção: 600000-900000 (10-15min) — diretriz do Omar.
   POLL_INTERVAL_MS: 10000,
-  // Rota que devolve a última foto (JPEG cru) tirada pelo ESP32-CAM. null = esconde o card.
+  // Rota que devolve a última foto (JPEG cru) tirada pelo ESP32-CAM.
   FOTO_URL: 'https://pivo-de-irrigacao.duckdns.org/foto/ultima',
   FOTO_POLL_INTERVAL_MS: 15000,
   // Histórico de fotos (galeria) — lista + busca individual de cada uma.
   FOTO_LISTA_URL: 'https://pivo-de-irrigacao.duckdns.org/foto/lista',
   FOTO_VER_URL: 'https://pivo-de-irrigacao.duckdns.org/foto/ver',
+  // Pivôs e dispositivos cadastrados (mesmas rotas do dispositivos.html) —
+  // usadas aqui só pra descobrir quais pivôs existem de verdade e quais
+  // dispositivos (câmera/telemetria) tem dentro de cada um.
+  PIVOS_URL: 'https://pivo-de-irrigacao.duckdns.org/admin/pivos',
+  DISPOSITIVOS_URL: 'https://pivo-de-irrigacao.duckdns.org/admin/dispositivos',
 
   // ── Geometria do pivô ───────────────────────────────────────
   // O ponto de pivô NUNCA se move: se você for até ele uma vez e anotar a
@@ -643,12 +653,8 @@ const CONFIG = {
     referencia: 0,
   },
 
-  // Nome amigável por device_id, pra quando houver mais de um pivô.
-  NOMES: { 'pivo-01': 'Pivô 01 · teste' },
 };
 
-const REF_POINT = { lat: -15.7801, lng: -47.9292 }; // referência só do modo demonstração
-const DEVICE_PADRAO = 'pivo-01';
 
 // ── Geometria ─────────────────────────────────────────────────
 // Tudo em plano tangente local: perto do pivô (centenas de metros) a curvatura
@@ -725,16 +731,52 @@ function mediana(v) {
 }
 
 // ── Estado ────────────────────────────────────────────────────
-// Um balde por device_id, então o dia em que o backend mandar vários pivôs
-// nada aqui precisa mudar — só o seletor no cabeçalho aparece.
+// Um balde por pivo_id — cada pivô cadastrado tem o seu, com a leitura mais
+// recente do dispositivo de telemetria de dentro dele.
 const pivos = {};
-let ativo = DEVICE_PADRAO;
+let ativo = null;
+
+// Pivôs e dispositivos cadastrados de verdade (não é mais leitura crua do
+// banco) — carregado uma vez no início e sempre que algo é apagado/criado
+// no dispositivos.html, refletido aqui na próxima leitura de carregarPivosEDispositivos.
+let pivosReais = [];
+let dispositivosReais = [];
+
+// Descoberto na hora (sem cadastro de "tipo" de device): tenta cada
+// dispositivo do pivô ativo até achar qual manda foto — guardado só pra
+// filtrar a galeria de histórico pelo device certo.
+let cameraDeviceAtivo = null;
 
 function balde(id) {
   if (!pivos[id]) {
     pivos[id] = { leituras: [], calib: null, varredura: 0, anguloInicio: null };
   }
   return pivos[id];
+}
+
+function devicesDoPivo(pivoId) {
+  return dispositivosReais.filter(d => d.pivo_id === pivoId).map(d => d.device_id);
+}
+
+async function carregarPivosEDispositivos() {
+  try {
+    const [resPivos, resDevices] = await Promise.all([
+      fetch(CONFIG.PIVOS_URL, { headers: cabecalhoAuth() }),
+      fetch(CONFIG.DISPOSITIVOS_URL, { headers: cabecalhoAuth() }),
+    ]);
+    if (resPivos.status === 401 || resPivos.status === 403 || resDevices.status === 401 || resDevices.status === 403) {
+      sair();
+      return;
+    }
+    if (!resPivos.ok || !resDevices.ok) throw new Error('HTTP ' + resPivos.status + '/' + resDevices.status);
+    pivosReais = (await resPivos.json()).pivos;
+    dispositivosReais = (await resDevices.json()).dispositivos;
+    if (!ativo || !pivosReais.some(p => p.pivo_id === ativo)) {
+      ativo = pivosReais.length ? pivosReais[0].pivo_id : null;
+    }
+  } catch (err) {
+    console.error('Falha ao carregar pivôs/dispositivos:', err);
+  }
 }
 
 function formatTime(date) {
@@ -756,15 +798,17 @@ function duracao(horas) {
   return min ? `${h}h${String(min).padStart(2, '0')}` : `${h}h`;
 }
 
-function normalizeReading(raw) {
-  // O backend manda 'criado_em' (não 'timestamp') e ainda NÃO manda
-  // 'temperatura' nem 'device_id'. Tratamos todos os casos aqui.
+function normalizeReading(raw, pivoId) {
+  // O backend manda 'criado_em' (não 'timestamp'). O "device" do balde() é
+  // o pivo_id (não o device_id cru) — um pivô pode ter mais de um device de
+  // telemetria no futuro, mas pra geometria/gráfico eles compartilham a
+  // mesma linha do tempo do pivô.
   const quando = raw.criado_em ?? raw.timestamp;
   const temp = raw.temperatura;
   const umid = raw.umidade;
   const alt = raw.altitude;
   return {
-    device: String(raw.device_id ?? raw.dispositivo ?? DEVICE_PADRAO),
+    device: pivoId,
     timestamp: quando ? new Date(quando) : new Date(),
     temperatura: (temp === undefined || temp === null) ? null : Number(temp),
     umidade: (umid === undefined || umid === null) ? null : Number(umid),
@@ -1251,18 +1295,22 @@ function updateCards(p) {
 }
 
 // ── Seletor de pivô ───────────────────────────────────────────
+// Alimentado pelos pivôs REALMENTE cadastrados (GET /admin/pivos), não mais
+// por qualquer device_id cru que apareça na última leitura do banco — antes
+// disso misturava dado de teste/lixo com um pivô fixo que nem existia.
 function renderSeletor() {
-  const ids = Object.keys(pivos);
   const sel = document.getElementById('pivoSelect');
-  sel.classList.toggle('show', ids.length > 1);
-  if (ids.length <= 1) return;
-  if (sel.options.length === ids.length) return;
+  sel.classList.toggle('show', pivosReais.length > 1);
+  if (pivosReais.length <= 1) return;
+  const idsAtuais = Array.from(sel.options).map(o => o.value).join(',');
+  const idsNovos = pivosReais.map(p => p.pivo_id).join(',');
+  if (idsAtuais === idsNovos) return;
   sel.innerHTML = '';
-  ids.forEach(id => {
+  pivosReais.forEach(p => {
     const opt = document.createElement('option');
-    opt.value = id;
-    opt.textContent = CONFIG.NOMES[id] ?? id;
-    if (id === ativo) opt.selected = true;
+    opt.value = p.pivo_id;
+    opt.textContent = `${p.pivo_id} (${p.cliente})`;
+    if (p.pivo_id === ativo) opt.selected = true;
     sel.appendChild(opt);
   });
 }
@@ -1270,7 +1318,18 @@ function renderSeletor() {
 document.getElementById('pivoSelect').addEventListener('change', (e) => {
   ativo = e.target.value;
   if (map) { map._enquadrou = false; }
+  // Estado da foto/galeria é por pivô — limpa antes de trocar, senão mostra
+  // a foto do pivô anterior por um instante até a próxima chamada terminar.
+  cameraDeviceAtivo = null;
+  fotoAtualizadaEm = null;
+  const img = document.getElementById('fotoImg');
+  const empty = document.getElementById('fotoEmpty');
+  img.style.display = 'none';
+  empty.style.display = 'block';
+  empty.textContent = 'carregando…';
   redesenhar();
+  poll();
+  pollFoto();
 });
 
 // ── Alternador da fatia ───────────────────────────────────────
@@ -1301,15 +1360,11 @@ function setStatus(mode) {
     badge.classList.add('live');
     text.textContent = 'ao vivo';
     banner.classList.remove('show');
-  } else if (mode === 'offline') {
+  } else {
     badge.classList.add('offline');
     text.textContent = 'sem conexão';
-    banner.innerHTML = 'Não foi possível falar com <code>CONFIG.API_URL</code> — mostrando dados de exemplo até a conexão voltar.';
+    banner.innerHTML = 'Não foi possível falar com o backend (<code>CONFIG.API_URL</code>) — tentando de novo sozinho.';
     banner.classList.add('show', 'offline');
-  } else {
-    text.textContent = 'demonstração';
-    banner.innerHTML = 'Sem API configurada — pivô simulado girando em volta de um centro fixo. Defina <code>CONFIG.API_URL</code> para conectar ao backend Flask.';
-    banner.classList.add('show', 'demo');
   }
 }
 
@@ -1377,32 +1432,44 @@ function updateFotoMeta() {
   meta.textContent = fotoAtualizadaEm ? `atualizado ${timeAgo(fotoAtualizadaEm)}` : 'aguardando primeira foto';
 }
 
-function pollFoto() {
-  if (!CONFIG.FOTO_URL) return;
+async function pollFoto() {
+  if (!ativo) return;
   const img = document.getElementById('fotoImg');
   const empty = document.getElementById('fotoEmpty');
-  // Ana: trocado de <img src=...> pra fetch(), porque uma tag <img> não
-  // consegue mandar o header Authorization — e a rota agora exige login.
-  fetch(CONFIG.FOTO_URL + '?t=' + Date.now(), { headers: cabecalhoAuth() })
-    .then(res => {
-      if (res.status === 401 || res.status === 403) { sair(); throw new Error('sessão inválida'); }
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      return res.blob();
-    })
-    .then(blob => {
+  const candidatos = devicesDoPivo(ativo);
+
+  if (!candidatos.length) {
+    img.style.display = 'none';
+    empty.style.display = 'block';
+    empty.textContent = 'este pivô não tem dispositivo cadastrado';
+    return;
+  }
+
+  // Mesma ideia do leituraDoPivo: tenta cada dispositivo do pivô até um
+  // responder com foto de verdade (o(s) outro(s), ex. telemetria, dão 404
+  // e são pulados).
+  for (const deviceId of candidatos) {
+    try {
+      // Ana: trocado de <img src=...> pra fetch(), porque uma tag <img> não
+      // consegue mandar o header Authorization — e a rota agora exige login.
+      const res = await fetch(`${CONFIG.FOTO_URL}?device_id=${encodeURIComponent(deviceId)}&t=${Date.now()}`, { headers: cabecalhoAuth() });
+      if (res.status === 401 || res.status === 403) { sair(); return; }
+      if (!res.ok) continue;
+      const blob = await res.blob();
       const urlAntiga = img.dataset.blobUrl;
       const url = URL.createObjectURL(blob);
       img.src = url;
       img.dataset.blobUrl = url;
       img.style.display = 'block';
       empty.style.display = 'none';
+      cameraDeviceAtivo = deviceId;
       fotoAtualizadaEm = new Date();
       updateFotoMeta();
       if (urlAntiga) URL.revokeObjectURL(urlAntiga); // libera a foto anterior da memória
-    })
-    .catch(() => {
-      if (!fotoAtualizadaEm) empty.textContent = 'nenhuma foto ainda — câmera não enviou nada pro backend';
-    });
+      return;
+    } catch (err) { /* tenta o próximo dispositivo do pivô */ }
+  }
+  if (!fotoAtualizadaEm) empty.textContent = 'nenhuma foto ainda — câmera não enviou nada pro backend';
 }
 
 // ── Galeria de fotos (histórico) ─────────────────────────────
@@ -1447,7 +1514,13 @@ async function carregarGaleria() {
   grade.textContent = 'carregando…';
 
   try {
-    const res = await fetch(CONFIG.FOTO_LISTA_URL, { headers: cabecalhoAuth() });
+    // Sem o device da câmera do pivô ativo, cai no padrão do admin (todo
+    // mundo) — acontece só se a galeria for aberta antes do pollFoto()
+    // achar a câmera; corrige sozinho na próxima abertura.
+    const url = cameraDeviceAtivo
+      ? `${CONFIG.FOTO_LISTA_URL}?device_id=${encodeURIComponent(cameraDeviceAtivo)}`
+      : CONFIG.FOTO_LISTA_URL;
+    const res = await fetch(url, { headers: cabecalhoAuth() });
     if (res.status === 401 || res.status === 403) { sair(); return; }
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const { fotos } = await res.json();
@@ -1507,56 +1580,6 @@ document.getElementById('galeriaToggle').addEventListener('click', () => {
   }
 });
 
-// ── Demonstração ──────────────────────────────────────────────
-// Pivô sintético: centro fixo, raio 320 m, girando. A velocidade é exagerada
-// (uma volta a cada ~12min em vez de 12-24h) só pra dar pra ver acontecendo.
-const DEMO = { raio: 320, grausPorMs: 360 / (12 * 60 * 1000), ruidoM: 4 };
-
-function demoLeitura(quando, anguloBase) {
-  const rad = (anguloBase * Math.PI) / 180;
-  const jx = (Math.random() - 0.5) * 2 * DEMO.ruidoM;
-  const jy = (Math.random() - 0.5) * 2 * DEMO.ruidoM;
-  const pos = paraGraus(
-    { x: DEMO.raio * Math.sin(rad) + jx, y: DEMO.raio * Math.cos(rad) + jy },
-    { latitude: REF_POINT.lat, longitude: REF_POINT.lng }
-  );
-  return {
-    device: DEVICE_PADRAO,
-    timestamp: quando,
-    temperatura: Math.round((24 + Math.sin(quando.getTime() / 6e5) * 2 + Math.random() * 0.4) * 10) / 10,
-    umidade: Math.round((55 + Math.cos(quando.getTime() / 6e5) * 8 + Math.random() * 1.5) * 10) / 10,
-    altitude: Math.round(540 + Math.random() * 2),
-    latitude: pos.latitude,
-    longitude: pos.longitude,
-  };
-}
-
-function semearDemo(p) {
-  // 30 pontos cobrindo ~150° de arco: já entra calibrado, sem esperar meia hora.
-  const agora = Date.now();
-  for (let i = 29; i >= 0; i--) {
-    const quando = new Date(agora - i * 60 * 1000);
-    const ang = 20 + (29 - i) * 5;
-    const r = demoLeitura(quando, ang);
-    r._anguloDemo = ang;
-    p.leituras.push(r);
-  }
-}
-
-function proximaDemo(p) {
-  const ultima = p.leituras[p.leituras.length - 1];
-  const quando = new Date();
-  // Continua de onde parou. Se as leituras anteriores vieram da API de verdade
-  // (queda de conexão no meio), retoma do último ângulo real calculado.
-  const anterior = ultima
-    ? (isFinite(ultima._anguloDemo) ? ultima._anguloDemo : (isFinite(ultima.angulo) ? ultima.angulo : 0))
-    : 0;
-  const base = anterior + (quando - (ultima ? ultima.timestamp : quando)) * DEMO.grausPorMs;
-  const r = demoLeitura(quando, base);
-  r._anguloDemo = base;
-  return r;
-}
-
 // ── Ciclo ─────────────────────────────────────────────────────
 function guardar(leitura) {
   const p = balde(leitura.device);
@@ -1579,27 +1602,31 @@ function redesenhar() {
   renderSeletor();
 }
 
-async function fetchFromApi() {
-  const res = await fetch(CONFIG.API_URL, { headers: cabecalhoAuth() });
-  if (res.status === 401 || res.status === 403) { sair(); throw new Error('sessão inválida'); }
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  const data = await res.json();
-  return Array.isArray(data) ? data.map(normalizeReading) : [normalizeReading(data)];
+// Tenta cada dispositivo do pivô ativo até um responder com leitura — sem
+// cadastro de "tipo" de device, esse é o jeito de descobrir qual deles é o
+// de telemetria (o(s) outro(s) do mesmo pivô, ex. câmera, respondem 404 e
+// são ignorados aqui). Não tem "cache" de propósito: são no máximo 1-2
+// dispositivos por pivô, o custo de tentar de novo a cada poll é
+// desprezível e evita travar "achando" o device errado pra sempre se a
+// ordem dos dispositivos mudar.
+async function leituraDoPivo(pivoId) {
+  for (const deviceId of devicesDoPivo(pivoId)) {
+    const res = await fetch(`${CONFIG.API_URL}?device_id=${encodeURIComponent(deviceId)}`, { headers: cabecalhoAuth() });
+    if (res.status === 401 || res.status === 403) { sair(); return null; }
+    if (res.ok) return normalizeReading(await res.json(), pivoId);
+  }
+  return null;
 }
 
 async function poll() {
-  if (CONFIG.API_URL) {
-    try {
-      (await fetchFromApi()).forEach(guardar);
-      setStatus('live');
-    } catch (err) {
-      console.error('Falha ao buscar dados da API:', err);
-      setStatus('offline');
-      guardar(proximaDemo(balde(DEVICE_PADRAO)));
-    }
-  } else {
-    setStatus('demo');
-    guardar(proximaDemo(balde(DEVICE_PADRAO)));
+  if (!ativo) { setStatus('offline'); return; }
+  try {
+    const leitura = await leituraDoPivo(ativo);
+    if (leitura) guardar(leitura);
+    setStatus('live');
+  } catch (err) {
+    console.error('Falha ao buscar leitura:', err);
+    setStatus('offline');
   }
   redesenhar();
 }
@@ -1609,23 +1636,15 @@ async function init() {
   try { marcarModo(); } catch (err) { console.error('Erro no alternador:', err); }
   try { renderAuthArea(); } catch (err) { console.error('Erro ao montar área de conta:', err); }
 
-  if (CONFIG.API_URL) {
-    try {
-      (await fetchFromApi()).forEach(guardar);
-      setStatus('live');
-    } catch (err) {
-      console.error('Falha ao buscar dados iniciais:', err);
-      setStatus('offline');
-    }
-  }
+  await carregarPivosEDispositivos();
+  renderSeletor();
 
-  if (!balde(DEVICE_PADRAO).leituras.length) {
-    semearDemo(balde(DEVICE_PADRAO));
-    if (!CONFIG.API_URL) setStatus('demo');
+  if (ativo) {
+    await poll();
+    await pollFoto();
+  } else {
+    setStatus('offline');
   }
-
-  redesenhar();
-  pollFoto();
 
   setInterval(poll, CONFIG.POLL_INTERVAL_MS);
   setInterval(pollFoto, CONFIG.FOTO_POLL_INTERVAL_MS);
