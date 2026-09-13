@@ -12,11 +12,10 @@
   const sessao = localStorage.getItem('pivo_user');
   if (!sessao) {
     window.location.replace('index.html');
+  } else if (JSON.parse(sessao).role !== 'admin') {
+    // logado, mas não é admin — usuario/aluno usa o fotos.html por enquanto.
+    window.location.replace('fotos.html');
   }
-  // Admin e usuario caem os dois aqui agora — o seletor de pivô já
-  // filtra sozinho pra cada papel (ver /meus-pivos e /meus-dispositivos
-  // no app.py). Só o link pra dispositivos.html (cadastro) some pra
-  // quem não é admin, mais abaixo.
 </script>
 <title>Monitor de campo — ESP32</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
